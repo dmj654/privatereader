@@ -273,3 +273,18 @@ ubuntu 与 macos 同时失败 → 不是 YAML、不是代码，是账号侧额�
 
 **这次卡死的真凶**：测试里请求 `STSongti-SC-Regular` / `STKaiti-SC-Regular`，
 macOS 对未安装字体会走按需下载，无窗口进程卡死。已改为只验证候选名声明与系统字体字号。
+
+
+## 额度问题的结论（2026-11-24 18:30）
+
+**根因**：仓库是 private。私有仓库 Free 计划只有 2000 分钟/月，macOS runner 按 10 倍扣，
+实际等效约 200 分钟构建时间；今天十几轮 CI + 5 次出包 + 20 任务诊断矩阵把它用光了。
+
+**解决**：仓库已改为 **public**（`github.com/dmj654/privatereader`）。
+公开仓库的标准 runner（含 macOS）**无限免费**，之后跑 CI 不再有额度约束。
+
+**改公开前已确认**：76 个文件、364 KB、无 `.p12` / token / `.env` / 私钥；
+`.workbuddy/`（工作笔记）与 `dist/`（安装包）均在 gitignore 中。
+
+**付费规则备忘**：公开仓库免费；私有仓库 Free 2000 分钟/月，Windows ×2、macOS ×10。
+超额后按量计费，macOS 约 $0.062/分钟。larger runner 无论仓库公开与否都计费。
