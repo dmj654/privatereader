@@ -47,7 +47,7 @@ final class RepositoryTests: XCTestCase {
         try books.insert(makeBook())
 
         try ProgressRepository(db: database.writer)
-            .save(Progress(bookId: "b1", chapterIndex: 3, offset: 10, percent: 0.2, updatedAt: 1))
+            .save(ReadingProgress(bookId: "b1", chapterIndex: 3, offset: 10, percent: 0.2, updatedAt: 1))
         try BookmarkRepository(db: database.writer)
             .add(Bookmark(bookId: "b1", chapterIndex: 3, offset: 10, excerpt: "摘录"))
         try SessionRepository(db: database.writer)
@@ -87,8 +87,8 @@ final class RepositoryTests: XCTestCase {
     func testProgressSaveOverwrites() throws {
         let repo = ProgressRepository(db: database.writer)
         try BookRepository(db: database.writer).insert(makeBook())
-        try repo.save(Progress(bookId: "b1", chapterIndex: 1, offset: 0, percent: 0.1, updatedAt: 1))
-        try repo.save(Progress(bookId: "b1", chapterIndex: 5, offset: 88, percent: 0.5, updatedAt: 2))
+        try repo.save(ReadingProgress(bookId: "b1", chapterIndex: 1, offset: 0, percent: 0.1, updatedAt: 1))
+        try repo.save(ReadingProgress(bookId: "b1", chapterIndex: 5, offset: 88, percent: 0.5, updatedAt: 2))
 
         let progress = try XCTUnwrap(try repo.fetch(bookId: "b1"))
         XCTAssertEqual(progress.chapterIndex, 5)

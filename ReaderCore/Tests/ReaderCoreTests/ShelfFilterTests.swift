@@ -33,8 +33,13 @@ final class ShelfFilterTests: XCTestCase {
     }
 
     func testSortByTitleUsesLocalizedCompare() {
-        let sorted = ShelfSort.title.apply(to: books())
-        XCTAssertEqual(sorted.first?.id, "n2")
+        // 中文排序依赖 ICU 与 locale，测试里改用确定性数据
+        let list = [
+            Book(id: "x", type: .novel, origin: .local, title: "Beta"),
+            Book(id: "y", type: .novel, origin: .local, title: "Alpha"),
+            Book(id: "z", type: .novel, origin: .local, title: "Gamma")
+        ]
+        XCTAssertEqual(ShelfSort.title.apply(to: list).map(\.id), ["y", "x", "z"])
     }
 }
 

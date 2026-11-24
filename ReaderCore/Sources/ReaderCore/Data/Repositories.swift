@@ -86,16 +86,16 @@ public struct ProgressRepository {
         self.db = db
     }
 
-    public func save(_ progress: Progress) throws {
+    public func save(_ progress: ReadingProgress) throws {
         try db.write { try progress.save($0) }
     }
 
-    public func fetch(bookId: String) throws -> Progress? {
-        try db.read { try Progress.fetchOne($0, key: bookId) }
+    public func fetch(bookId: String) throws -> ReadingProgress? {
+        try db.read { try ReadingProgress.fetchOne($0, key: bookId) }
     }
 
     public func delete(bookId: String) throws {
-        _ = try db.write { db in try Progress.deleteOne(db, key: bookId) }
+        _ = try db.write { db in try ReadingProgress.deleteOne(db, key: bookId) }
     }
 }
 

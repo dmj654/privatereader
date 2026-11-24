@@ -81,7 +81,7 @@ extension Book: FetchableRecord, PersistableRecord {
     public static let databaseTableName = "book"
 }
 
-public struct Progress: Codable, Equatable, Sendable {
+public struct ReadingProgress: Codable, Equatable, Sendable {
     public var bookId: String
     public var chapterIndex: Int
     public var offset: Int
@@ -97,7 +97,7 @@ public struct Progress: Codable, Equatable, Sendable {
     }
 }
 
-extension Progress: FetchableRecord, PersistableRecord {
+extension ReadingProgress: FetchableRecord, PersistableRecord {
     public static let databaseTableName = "progress"
 }
 

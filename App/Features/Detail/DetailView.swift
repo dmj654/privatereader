@@ -6,7 +6,7 @@ struct DetailView: View {
     @EnvironmentObject private var env: AppEnvironment
     @Environment(\.dismiss) private var dismiss
 
-    @State private var progress: Progress?
+    @State private var progress: ReadingProgress?
     @State private var showDeleteConfirm = false
 
     var body: some View {
