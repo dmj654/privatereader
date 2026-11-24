@@ -1,0 +1,44 @@
+name: Diagnose
+
+# 用途：某个测试类卡死时，把测试按类拆开跑，快速定位是哪一类。
+# 只在手动触发时运行。
+on:
+  workflow_dispatch:
+
+jobs:
+  suites:
+    name: ${{ matrix.suite }}
+    runs-on: macos-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - SandboxPathsTests
+          - DatabaseTests
+          - RepositoryTests
+          - TextDecoderTests
+          - ChapterSplitterTests
+          - TxtParserTests
+          - NaturalSortTests
+          - EpubParserTests
+          - CbzParserTests
+          - PdfParserTests
+          - ImportServiceTests
+          - CoverStoreTests
+          - ShelfFilterTests
+          - LibraryServiceTests
+          - PaginatorTests
+          - ProgressMathTests
+          - ReaderStyleTests
+          - ChapterProviderTests
+          - DirectoryScannerTests
+          - ImportLogTests
+    steps:
+      - uses: actions/checkout@v4
+      - name: 工具链版本
+        run: swift --version
+      - name: 运行 ${{ matrix.suite }}
+        run: |
+          set -o pipefail
+          swift test --package-path ReaderCore --filter '${{ matrix.suite }}' 2>&1 | tail -40
