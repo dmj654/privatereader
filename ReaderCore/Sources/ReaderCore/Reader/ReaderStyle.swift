@@ -94,6 +94,11 @@ public struct ReaderStyle: Equatable, Sendable {
     }
 
     /// 按家族解析字体；解析不到就退回系统字体，不会变成方框。
+    ///
+    /// 刻意分平台：
+    /// - iOS 用 `UIFont(name:)`，能正确命中 STSongti / STKaiti 这些中文字体。
+    /// - macOS 只走 CoreText，**不碰 AppKit**。CI 是无窗口进程，`NSFont` 的字体匹配
+    ///   可能阻塞在系统字体服务上——上次 CI 卡了 29 分钟就是这么来的。
     public func font() -> CTFont {
         #if canImport(UIKit)
         for name in fontFamily.candidates {
@@ -101,16 +106,18 @@ public struct ReaderStyle: Equatable, Sendable {
                 return font as CTFont
             }
         }
-        #elseif canImport(AppKit)
-        for name in fontFamily.candidates {
-            if let font = NSFont(name: name, size: fontSize) {
-                return font as CTFont
+        #else
+        if let first = fontFamily.candidates.first {
+            let candidate = CTFontCreateWithName(first as CFString, fontSize, nil)
+            let resolved = CTFontCopyPostScriptName(candidate) as String
+            if !resolved.isEmpty, resolved != "LastResort" {
+                return candidate
             }
         }
         #endif
 
         return CTFontCreateUIFontForLanguage(.system, fontSize, nil)
-            ?? CTFontCreateWithName("PingFang SC" as CFString, fontSize, nil)
+            ?? CTFontCreateWithName("Helvetica" as CFString, fontSize, nil)
     }
 
     /// 正文按段落重组：把连续空行压成一个。
