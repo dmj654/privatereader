@@ -27,6 +27,14 @@ public final class AppDatabase {
         return try AppDatabase(queue)
     }
 
+    /// 兜底：连文件库都打不开时用内存库，保证 App 仍可运行。
+    public static func fallback() -> AppDatabase {
+        var configuration = Configuration()
+        configuration.foreignKeysEnabled = true
+        let queue = try! DatabaseQueue(configuration: configuration)
+        return try! AppDatabase(queue)
+    }
+
     public static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
 

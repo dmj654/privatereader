@@ -1,0 +1,46 @@
+import SwiftUI
+import ReaderCore
+
+/// 依赖容器。所有页面从这里拿仓储，不自己造。
+@MainActor
+final class AppEnvironment: ObservableObject {
+    let paths: SandboxPaths
+    let database: AppDatabase
+
+    let books: BookRepository
+    let groups: GroupRepository
+    let progress: ProgressRepository
+    let bookmarks: BookmarkRepository
+    let sources: SourceRepository
+    let sessions: SessionRepository
+    let cache: CacheRepository
+    let library: LibraryService
+
+    @Published var startupMessage: String?
+
+    init() {
+        let paths = SandboxPaths.live
+        var database: AppDatabase
+        var message: String?
+
+        do {
+            try paths.prepare()
+            database = try AppDatabase.open(at: paths.database)
+        } catch {
+            database = (try? AppDatabase.inMemory()) ?? AppDatabase.fallback()
+            message = "本地数据库打开失败，本次运行使用临时库：\(error.localizedDescription)"
+        }
+
+        self.paths = paths
+        self.database = database
+        self.books = BookRepository(db: database.writer)
+        self.groups = GroupRepository(db: database.writer)
+        self.progress = ProgressRepository(db: database.writer)
+        self.bookmarks = BookmarkRepository(db: database.writer)
+        self.sources = SourceRepository(db: database.writer)
+        self.sessions = SessionRepository(db: database.writer)
+        self.cache = CacheRepository(db: database.writer)
+        self.library = LibraryService(books: BookRepository(db: database.writer), paths: paths)
+        self.startupMessage = message
+    }
+}
