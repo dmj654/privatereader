@@ -11,9 +11,13 @@ final class DatabaseTests: XCTestCase {
                 sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
             )
         }
+        // grdb_migrations 是 GRDB 自己记账的表，单独断言
+        XCTAssertTrue(tables.contains("grdb_migrations"))
+
+        let appTables = tables.filter { $0 != "grdb_migrations" }
         let expected = ["book", "bookGroup", "bookmark", "chapterCache", "progress",
                         "readingSession", "searchHistory", "source"]
-        XCTAssertEqual(tables.sorted(), expected.sorted())
+        XCTAssertEqual(appTables.sorted(), expected.sorted())
     }
 
     func testSeedCreatesThreeBuiltinGroups() throws {
