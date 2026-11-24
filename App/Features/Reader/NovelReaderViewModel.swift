@@ -187,9 +187,7 @@ final class NovelReaderViewModel: ObservableObject {
             return NSAttributedString(string: "")
         }
         let range = pageRanges[pageIndex]
-        guard range.location + range.length <= attributed.length else { return attributed }
-
-        let page = NSMutableAttributedString(attributedString: attributed.attributedSubstring(from: range))
+        guard let page = slice(attributed, range) else { return attributed }
         applySpeechHighlight(to: page, pageRange: range)
         return page
     }
@@ -207,6 +205,42 @@ final class NovelReaderViewModel: ObservableObject {
         return built
     }
 
+    /// 切出一页，并处理"续页首行"。
+    ///
+    /// 分页会从段落中间切页。下一页开头这半段其实还是上一段的延续，
+    /// 但 CoreText 会把它当成本段第一行，把首行缩进照搬过来——
+    /// 视觉上就像凭空多了一个段落。这里把续页首段的缩进和段前距清掉。
+    private func slice(_ attributed: NSAttributedString, _ range: NSRange) -> NSMutableAttributedString? {
+        guard range.location >= 0,
+              range.location + range.length <= attributed.length else { return nil }
+
+        let page = NSMutableAttributedString(attributedString: attributed.attributedSubstring(from: range))
+        guard range.location > 0, page.length > 0 else { return page }
+
+        let full = attributed.string as NSString
+        let previous = full.character(at: range.location - 1)
+        let startsAtParagraph = (previous == 0x000A || previous == 0x000D || previous == 0x2029)
+        guard !startsAtParagraph else { return page }
+
+        // 只处理页面第一段：找到第一个换行为止
+        let pageText = page.string as NSString
+        let newline = pageText.range(of: "\n")
+        let paragraphLength = newline.location == NSNotFound
+            ? pageText.length
+            : min(newline.location + 1, pageText.length)
+        guard paragraphLength > 0 else { return page }
+
+        let paragraphRange = NSRange(location: 0, length: paragraphLength)
+        let style = NSMutableParagraphStyle()
+        if let existing = page.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
+            style.setParagraphStyle(existing)
+        }
+        style.firstLineHeadIndent = 0
+        style.paragraphSpacingBefore = 0
+        page.addAttribute(.paragraphStyle, value: style, range: paragraphRange)
+        return page
+    }
+
     private var speechHighlightColor: UIColor {
         theme.isDark
             ? UIColor(white: 1, alpha: 0.16)
@@ -214,8 +248,9 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     private func applySpeechHighlight(to page: NSMutableAttributedString, pageRange: NSRange) {
-        guard let speechIndex, speechSentences.indices.contains(speechIndex) else { return }
-        let sentence = speechSentences[speechIndex]
+        // 用朗读队列里的句子，而不是原始切句结果：
+        // 页首把句子切成两半时，队列里存的是"从页首开始"的截断句，高亮才对得上。
+        guard let sentence = speechQueue?.current else { return }
 
         let overlap = NSIntersectionRange(sentence.range, pageRange)
         guard overlap.length > 0 else { return }
@@ -374,8 +409,10 @@ final class NovelReaderViewModel: ObservableObject {
 
     var isSpeechPrepared: Bool { speechQueue != nil }
 
-    /// 准备朗读：从当前页的第一句开始，返回要念的文本。
-    /// 不从头念——你已经看到哪，它就念哪。
+    /// 准备朗读：从当前页开口，正好是眼睛看到的位置。
+    ///
+    /// 页首落在句子中间时，要把这句截断，从页首那半句念起——
+    /// 不截断就会从上一页念起（听感错位），跳到下一句又会漏掉眼前这半句。
     func prepareSpeech(startAtCurrentPage: Bool = true) -> String? {
         guard let attributed = chapterAttributed(), attributed.length > 0 else { return nil }
         let key = CacheKey(chapter: chapterIndex, style: style, theme: theme.rawValue)
@@ -386,19 +423,44 @@ final class NovelReaderViewModel: ObservableObject {
         }
         guard !speechSentences.isEmpty else { return nil }
 
-        var start = 0
+        var start = SpeechStart(index: 0, characterOffset: 0)
         if startAtCurrentPage, pageRanges.indices.contains(pageIndex) {
             // 章标题排在正文前面，但它不是正文。从章首开始听时跳过标题，
             // 否则"那一页的第一句"（正文第一句）会被标题顶掉。
             let titleLength = (currentChapter?.title as NSString?)?.length ?? 0
-            start = SpeechStartLocator.startIndex(
+            start = SpeechStartLocator.start(
                 sentences: speechSentences,
                 pageLocation: pageRanges[pageIndex].location,
                 titleLength: titleLength
             )
         }
 
-        speechQueue = SpeechQueue(sentences: speechSentences, index: start)
+        var queueSentences = speechSentences
+        var queueStart = start.index
+
+        if start.characterOffset > 0, queueSentences.indices.contains(start.index) {
+            let original = queueSentences[start.index]
+            let offset = min(start.characterOffset, original.length)
+
+            if offset >= original.length, queueStart + 1 < queueSentences.count {
+                // 页首落在这一句末尾的空白之后，下一句才是这一页的第一句
+                queueStart += 1
+            } else {
+                let cutText = (original.text as NSString).substring(from: offset)
+                if cutText.isEmpty, queueStart + 1 < queueSentences.count {
+                    queueStart += 1
+                } else {
+                    // 截断前半句：位置与长度都从页首算，高亮才会落在眼前
+                    queueSentences[start.index] = SpeechSentence(
+                        text: cutText,
+                        location: original.location + offset,
+                        length: original.length - offset
+                    )
+                }
+            }
+        }
+
+        speechQueue = SpeechQueue(sentences: queueSentences, index: queueStart)
         speechIndex = speechQueue?.index
         // 这里**不要**再 syncPageToSpeech：起点本来就取自当前页，
         // 同步只会在句子跨页时把刚翻过去的那一页又拉回上一页。

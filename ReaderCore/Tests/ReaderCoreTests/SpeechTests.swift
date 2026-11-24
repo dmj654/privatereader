@@ -175,19 +175,20 @@ final class SpeechStartLocatorTests: XCTestCase {
         XCTAssertEqual(sentences[start].text, "正文来了。", "标题里带句号被切成多句时也要跳干净")
     }
 
-    func testPageStartingInsideSentenceBeginsAtNextFullSentence() {
+    func testPageStartingInsideSentenceBeginsMidSentence() {
         let (sentences, titleLength) = chapter(
             title: "第七章 雨夜",
             body: "他推开门。风灌了进来。雨很大。"
         )
         let target = sentences.first { $0.text == "风灌了进来。" }!
-        let start = SpeechStartLocator.startIndex(
+        let start = SpeechStartLocator.start(
             sentences: sentences,
             pageLocation: target.location + 2, // 页首落在这句中间
             titleLength: titleLength
         )
-        XCTAssertEqual(sentences[start].text, "雨很大。",
-                       "页首落在句子中间时，要从这一页开始的下一句念，不能倒回去读上一页")
+        XCTAssertEqual(sentences[start.index].text, "风灌了进来。",
+                       "页首把句子切成两半时，要从这半句开口，不能跳到下一句")
+        XCTAssertEqual(start.characterOffset, 2, "从句中第 2 个字开始念")
     }
 
     func testPageStartingExactlyAtSentenceBoundaryUsesThatSentence() {
@@ -196,12 +197,13 @@ final class SpeechStartLocatorTests: XCTestCase {
             body: "他推开门。风灌了进来。雨很大。"
         )
         let target = sentences.first { $0.text == "风灌了进来。" }!
-        let start = SpeechStartLocator.startIndex(
+        let start = SpeechStartLocator.start(
             sentences: sentences,
             pageLocation: target.location,
             titleLength: titleLength
         )
-        XCTAssertEqual(sentences[start].text, "风灌了进来。")
+        XCTAssertEqual(sentences[start.index].text, "风灌了进来。")
+        XCTAssertEqual(start.characterOffset, 0)
     }
 
     func testPageInsideLastSentenceFallsBackToContainingSentence() {
@@ -209,12 +211,13 @@ final class SpeechStartLocatorTests: XCTestCase {
             SpeechSentence(text: "前面一句。", location: 0, length: 5),
             SpeechSentence(text: String(repeating: "长", count: 200) + "。", location: 5, length: 201)
         ]
-        let start = SpeechStartLocator.startIndex(
+        let start = SpeechStartLocator.start(
             sentences: sentences,
             pageLocation: 120, // 整页都在最后这句中间
             titleLength: 0
         )
-        XCTAssertEqual(start, 1, "页面上没有任何句子从头开始时，只能念包含页首的那句")
+        XCTAssertEqual(start.index, 1, "页面上没有任何句子从头开始时，只能念包含页首的那句")
+        XCTAssertEqual(start.characterOffset, 115, "从页首对应的字符开口，不重复上一页")
     }
 
     func testPageLocationInWhitespacePicksNextSentence() {
@@ -222,12 +225,22 @@ final class SpeechStartLocatorTests: XCTestCase {
             SpeechSentence(text: "上一句。", location: 0, length: 4),
             SpeechSentence(text: "下一句。", location: 6, length: 4)
         ]
-        let start = SpeechStartLocator.startIndex(
+        let start = SpeechStartLocator.start(
             sentences: sentences,
             pageLocation: 5,
             titleLength: 0
         )
-        XCTAssertEqual(sentences[start].text, "下一句。", "页首落在空白处时应从下一句开始，不重复上一页")
+        XCTAssertEqual(sentences[start.index].text, "下一句。", "页首落在空白处时应从下一句开始，不重复上一页")
+        XCTAssertEqual(start.characterOffset, 0)
+    }
+
+    func testTruncatingByOffsetKeepsPageText() {
+        // 页首落在句中时，截断后的句子必须正好等于页面上能看到的那半句
+        let sentence = SpeechSentence(text: "风灌了进来，他关上门。", location: 100, length: 11)
+        let pageLocation = 106
+        let offset = pageLocation - sentence.location
+        let cut = (sentence.text as NSString).substring(from: offset)
+        XCTAssertEqual(cut, "他关上门。")
     }
 
     func testNoTitleStillWorks() {

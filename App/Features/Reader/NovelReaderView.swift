@@ -64,6 +64,10 @@ struct NovelReaderView: View {
     @State private var exitOffset: CGFloat = 0
     @State private var isEdgeExit = false
 
+    /// 连续翻页时把"重新对齐朗读"合并成一次。
+    /// 每翻一页都打断语音会赶不上，最后往往一句都没开口。
+    @State private var speechRealignWork: DispatchWorkItem?
+
     init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
         _model = StateObject(wrappedValue: NovelReaderViewModel(
             book: book,
@@ -724,12 +728,22 @@ struct NovelReaderView: View {
     }
 
     /// 手动翻页、跳章之后，让朗读跟到新的位置。
+    ///
+    /// 连续翻页时不能每页都立刻打断并重新开口：语音引擎来不及启动，
+    /// 表现就是"连翻几页之后彻底没声了"。这里合并 0.3 秒内的多次翻页，只对齐最后一次。
     private func followSpeechAfterManualMove() {
         guard model.isSpeechPrepared else { return }
-        if let text = model.realignSpeechToCurrentPage() {
-            speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
-            speech.speak(text)
+
+        speechRealignWork?.cancel()
+        let work = DispatchWorkItem {
+            guard model.isSpeechPrepared else { return }
+            if let text = model.realignSpeechToCurrentPage() {
+                speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+                speech.speak(text)
+            }
         }
+        speechRealignWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }
 
     /// 面板上的翻页 / 翻章之后，从新页的第一句重新念。
@@ -790,6 +804,8 @@ struct NovelReaderView: View {
     }
 
     private func stopSpeech() {
+        speechRealignWork?.cancel()
+        speechRealignWork = nil
         speech.stop()
         sleepWorkItem?.cancel()
         sleepWorkItem = nil
