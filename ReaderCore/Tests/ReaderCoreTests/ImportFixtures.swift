@@ -17,10 +17,15 @@ enum ImportFixtures {
         return url
     }
 
+    private static func resolve(_ directory: URL?) throws -> URL {
+        if let directory { return directory }
+        return try makeDirectory()
+    }
+
     // MARK: 文本
 
     static func makeTxt(chapterCount: Int, chapterBody: String = "正文内容。", directory: URL? = nil) throws -> URL {
-        let dir = directory ?? (try makeDirectory())
+        let dir = try resolve(directory)
         var text = ""
         for index in 1...chapterCount {
             text += "第\(index)章 标题\(index)\n\(chapterBody)\n\n"
@@ -31,7 +36,7 @@ enum ImportFixtures {
     }
 
     static func makeGB18030Txt(directory: URL? = nil) throws -> URL {
-        let dir = directory ?? (try makeDirectory())
+        let dir = try resolve(directory)
         let text = "第一章 开始\n这是一段中文。\n\n第二章 结束\n又一段中文。\n"
         let url = dir.appendingPathComponent("gbk小说.txt")
         let data = try XCTUnwrapData(text.data(using: TextDecoder.gb18030))
@@ -73,7 +78,7 @@ enum ImportFixtures {
     // MARK: EPUB
 
     static func makeEpub(directory: URL? = nil) throws -> URL {
-        let dir = directory ?? (try makeDirectory())
+        let dir = try resolve(directory)
         let source = dir.appendingPathComponent("epub-src", isDirectory: true)
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
 
@@ -136,12 +141,12 @@ enum ImportFixtures {
     // MARK: CBZ
 
     static func makeCbz(fileNames: [String] = ["1.png", "2.png", "10.png"], directory: URL? = nil) throws -> URL {
-        let dir = directory ?? (try makeDirectory())
+        let dir = try resolve(directory)
         let source = dir.appendingPathComponent("cbz-src", isDirectory: true)
         try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
 
         for (index, name) in fileNames.enumerated() {
-            let color = (CGFloat(index) / 10.0, 0.5, 0.6)
+            let color: (CGFloat, CGFloat, CGFloat) = (CGFloat(index) / 10.0, CGFloat(0.5), CGFloat(0.6))
             try makeImageData(width: 120, height: 160, color: color).write(to: source.appendingPathComponent(name))
         }
 
@@ -153,7 +158,7 @@ enum ImportFixtures {
     // MARK: PDF
 
     static func makePdf(pageTexts: [String], directory: URL? = nil) throws -> URL {
-        let dir = directory ?? (try makeDirectory())
+        let dir = try resolve(directory)
         let url = dir.appendingPathComponent("测试文档.pdf")
         let data = NSMutableData()
 
