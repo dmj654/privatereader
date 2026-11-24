@@ -10,6 +10,8 @@ struct DetailView: View {
     @State private var showDeleteConfirm = false
     @State private var showReader = false
     @State private var showComicNotice = false
+    @State private var groups: [BookGroup] = []
+    @State private var groupID: String?
 
     var body: some View {
         ZStack {
@@ -27,7 +29,11 @@ struct DetailView: View {
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .task { progress = try? env.progress.fetch(bookId: book.id) }
+        .task {
+            progress = try? env.progress.fetch(bookId: book.id)
+            groups = (try? env.groups.all()) ?? []
+            groupID = (try? env.books.fetch(id: book.id))?.groupId ?? book.groupId
+        }
         .alert("漫画阅读器还没接上", isPresented: $showComicNotice) {
             Button("知道了", role: .cancel) {}
         } message: {
@@ -107,10 +113,22 @@ struct DetailView: View {
             }
             .buttonStyle(PrimaryButtonStyle())
 
-            Button {
+            Menu {
+                ForEach(groups) { group in
+                    Button {
+                        try? env.books.updateGroup(bookId: book.id, groupId: group.id)
+                        groupID = group.id
+                    } label: {
+                        if groupID == group.id {
+                            Label(group.name, systemImage: "checkmark")
+                        } else {
+                            Text(group.name)
+                        }
+                    }
+                }
             } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .medium))
+                Image(systemName: "folder")
+                    .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(Palette.ink2)
                     .frame(width: 48, height: 46)
                     .background(Palette.surface)
@@ -120,7 +138,6 @@ struct DetailView: View {
                             .strokeBorder(Palette.lineStrong, lineWidth: 1)
                     }
             }
-            .buttonStyle(.plain)
 
             Button {
                 showDeleteConfirm = true

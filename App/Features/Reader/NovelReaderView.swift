@@ -1,6 +1,14 @@
 import SwiftUI
 import ReaderCore
 
+/// 还没实现的入口，点了要给一句人话，不能静默。
+/// 判定标准很简单：**界面上出现的按钮就是承诺**。做不到就该说出来，而不是让你怀疑是手滑还是卡住。
+private struct PendingFeature: Identifiable {
+    let id = UUID()
+    let title: String
+    let detail: String
+}
+
 struct NovelReaderView: View {
     @StateObject private var model: NovelReaderViewModel
     @EnvironmentObject private var env: AppEnvironment
@@ -8,6 +16,9 @@ struct NovelReaderView: View {
 
     @State private var showTypography = false
     @State private var showCatalog = false
+    @State private var pending: PendingFeature?
+    @State private var typographyFocus: TypographySheet.Focus = .typography
+    @State private var scrubValue: Double?
 
     init(book: Book, env: AppEnvironment) {
         _model = StateObject(wrappedValue: NovelReaderViewModel(
@@ -50,10 +61,21 @@ struct NovelReaderView: View {
             }
         }
         .sheet(isPresented: $showTypography) {
-            TypographySheet(style: $model.style, theme: $model.theme) {
+            TypographySheet(style: $model.style, theme: $model.theme, focus: typographyFocus) {
                 model.repaginate()
             }
-            .presentationDetents([.height(300)])
+            .presentationDetents([.height(typographyFocus == .theme ? 210 : 300)])
+        }
+        .alert(
+            pending?.title ?? "",
+            isPresented: Binding(
+                get: { pending != nil },
+                set: { if !$0 { pending = nil } }
+            )
+        ) {
+            Button("知道了", role: .cancel) { pending = nil }
+        } message: {
+            Text(pending?.detail ?? "")
         }
         .overlay {
             if showCatalog {
@@ -150,7 +172,10 @@ struct NovelReaderView: View {
                 .lineLimit(1)
             Spacer()
             Button {
-                model.isMenuVisible = false
+                pending = PendingFeature(
+                    title: "净化还没接上",
+                    detail: "净化规则是书源自带的——滤掉站点塞进正文的广告和水印、还原被替换的字。等书源接进来，它会自动生效。"
+                )
             } label: {
                 Text("净化")
                     .font(.system(size: 11.5, weight: .semibold))
@@ -165,10 +190,25 @@ struct NovelReaderView: View {
     private var sideButtons: some View {
         VStack(spacing: 11) {
             sideButton("bookmark") { model.addBookmark() }
-            sideButton("magnifyingglass") {}
+            sideButton("magnifyingglass") {
+                pending = PendingFeature(
+                    title: "全书搜索还没接上",
+                    detail: "现在可以搜目录：点下面的目录按钮，里面有搜索框。正文全文搜索会跟书源搜索一起做。"
+                )
+            }
             sideButton("list.bullet") { showCatalog = true }
-            sideButton("play") {}
-            sideButton("headphones", highlighted: true) {}
+            sideButton("play") {
+                pending = PendingFeature(
+                    title: "自动阅读还没接上",
+                    detail: "计划里是 3 / 5 / 10 秒自动翻页，条漫模式也会一起做。"
+                )
+            }
+            sideButton("headphones", highlighted: true) {
+                pending = PendingFeature(
+                    title: "朗读就是下一步",
+                    detail: "M5 做：本地系统语音、逐句高亮跟随、点中间收面板、章末自动续读、锁屏可控。用系统音色，不联网、不上传正文。"
+                )
+            }
         }
     }
 
@@ -196,16 +236,17 @@ struct NovelReaderView: View {
 
                 Slider(
                     value: Binding(
-                        get: { model.progressPercent },
-                        set: { _ in }
+                        get: { scrubValue ?? model.progressPercent },
+                        set: { scrubValue = $0 }
                     ),
                     in: 0...1,
                     onEditingChanged: { editing in
-                        if !editing { model.persistProgress(force: true) }
+                        guard !editing, let value = scrubValue else { return }
+                        scrubValue = nil
+                        model.seek(toPercent: value)
                     }
                 )
                 .tint(Palette.accent)
-                .disabled(true)
 
                 Button("下一章") { model.jump(toChapter: model.chapterIndex + 1) }
                     .font(.system(size: 12.5))
@@ -218,9 +259,20 @@ struct NovelReaderView: View {
                 panelItem("sun.max", "白天") {
                     model.theme = model.theme.isDark ? .day : .night
                 }
-                panelItem("circle.lefthalf.filled", "主题") { showTypography = true }
-                panelItem("slider.horizontal.3", "设置") { showTypography = true }
-                panelItem("arrow.down.to.line", "缓存") {}
+                panelItem("circle.lefthalf.filled", "主题") {
+                    typographyFocus = .theme
+                    showTypography = true
+                }
+                panelItem("slider.horizontal.3", "设置") {
+                    typographyFocus = .typography
+                    showTypography = true
+                }
+                panelItem("arrow.down.to.line", "缓存") {
+                    pending = PendingFeature(
+                        title: "缓存还没接上",
+                        detail: "本地书本来就在手机上，不需要再缓存一份。这个按钮要等在线书源接进来才有意义。"
+                    )
+                }
             }
         }
         .padding(.top, 12)

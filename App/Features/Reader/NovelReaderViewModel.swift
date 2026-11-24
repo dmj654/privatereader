@@ -134,6 +134,12 @@ final class NovelReaderViewModel: ObservableObject {
         persistProgress()
     }
 
+    /// 按全书百分比跳章。滑杆松手时调用。
+    func seek(toPercent percent: Double) {
+        guard !chapters.isEmpty else { return }
+        jump(toChapter: ProgressMath.chapterIndex(fromPercent: percent, chapterCount: chapters.count))
+    }
+
     func jump(toChapter index: Int) {
         guard chapters.indices.contains(index) else { return }
         chapterIndex = index
