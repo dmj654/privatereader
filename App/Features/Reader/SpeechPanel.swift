@@ -11,6 +11,11 @@ struct SpeechPanel: View {
     let status: String
     let detail: String
 
+    // 跟随阅读主题，避免面板是另一块灰
+    let tint: Color
+    let ink: Color
+    let line: Color
+
     let onPreviousChapter: () -> Void
     let onPreviousPage: () -> Void
     let onTogglePlay: () -> Void
@@ -31,7 +36,7 @@ struct SpeechPanel: View {
                     .foregroundStyle(Palette.accent)
                 Text(detail)
                     .font(.system(size: 11))
-                    .foregroundStyle(Palette.ink3)
+                    .foregroundStyle(ink.opacity(0.5))
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -68,7 +73,7 @@ struct SpeechPanel: View {
         }
         .padding(.top, 12)
         .padding(.bottom, 30)
-        .glassBottomPanel()
+        .glassBottomPanel(tint: tint, tintOpacity: 0.94, line: line)
     }
 
     private var playButton: some View {
@@ -100,7 +105,7 @@ struct SpeechPanel: View {
                 Text(title)
                     .font(.system(size: 10))
             }
-            .foregroundStyle(Palette.ink2)
+            .foregroundStyle(ink.opacity(0.8))
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)

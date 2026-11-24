@@ -54,6 +54,9 @@ final class NovelReaderViewModel: ObservableObject {
 
     private var lastPageSize: CGSize = .zero
     private var lastSavedAt: TimeInterval = 0
+    /// 用户最后一次手动翻页/跳章的时间。朗读的"念完了"回调会晚到，
+    /// 需要知道这次晚到是不是紧跟在一次手动移动之后。
+    private var lastManualMoveAt: TimeInterval = 0
     private var sessionStartedAt: Date?
 
     private let initialChapter: Int?
@@ -86,6 +89,16 @@ final class NovelReaderViewModel: ObservableObject {
 
     var pageCount: Int { max(pageRanges.count, 1) }
     var displayPage: Int { min(pageIndex + 1, pageCount) }
+
+    /// 刚刚手动翻过页 / 跳过章。窗口取 1 秒：
+    /// 句末回调通常在一瞬间到达，1 秒足够覆盖，又不会误伤正常连读。
+    var isManuallyMovedRecently: Bool {
+        Date().timeIntervalSince1970 - lastManualMoveAt < 1.0
+    }
+
+    private func markManualMove() {
+        lastManualMoveAt = Date().timeIntervalSince1970
+    }
 
     var progressPercent: Double {
         let within = pageCount > 1 ? Double(pageIndex) / Double(pageCount - 1) : 0
@@ -264,6 +277,7 @@ final class NovelReaderViewModel: ObservableObject {
 
     func turnPage(by delta: Int) {
         guard !chapters.isEmpty else { return }
+        markManualMove()
         pendingPage = nil
         let target = pageIndex + delta
         if target < 0 {
@@ -327,6 +341,7 @@ final class NovelReaderViewModel: ObservableObject {
 
     func jump(toChapter index: Int) {
         guard chapters.indices.contains(index) else { return }
+        markManualMove()
         pendingPage = nil
         chapterIndex = index
         repaginate()
@@ -463,8 +478,13 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     /// 念下一句。返回 nil 表示本章念完了。
-    func advanceSpeechText() -> String? {
+    /// - Parameter respectsManualMove: 自动连读时为 true——刚翻页就不要按旧位置推进；
+    ///   用户主动点"下一句"时传 false，那是明确意图，不该被 1 秒窗口吞掉。
+    func advanceSpeechText(respectsManualMove: Bool = true) -> String? {
         guard var queue = speechQueue else { return nil }
+        // 用户刚翻页/跳章：队列马上要按新页重建，此时推进旧位置会跳句。
+        // 让 View 侧的 realign 接手。
+        if respectsManualMove, isManuallyMovedRecently { return nil }
         guard queue.advance() else { return nil }
         speechQueue = queue
         speechIndex = queue.index
@@ -484,10 +504,12 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     /// 本章念完，接着念下一章。返回下一章第一句的文本。
-    func beginNextChapterForSpeech() -> String? {
+    func beginNextChapterForSpeech(respectsManualMove: Bool = true) -> String? {
         // 朗读已经被结束（退出阅读器、点了退出、定时到点）就别再跳章开念。
         // 之前这里只看章节边界，于是 stop 之后排队到来的 didFinish 会把下一章念起来。
         guard speechQueue != nil else { return nil }
+        // 用户刚翻页/跳章：让 realign 按他停下的那一页接手，不要在这里自作主张跳下一章。
+        if respectsManualMove, isManuallyMovedRecently { return nil }
         guard chapterIndex + 1 < chapters.count else { return nil }
 
         chapterIndex += 1

@@ -707,6 +707,10 @@ struct NovelReaderView: View {
             } else if let nextChapter = viewModel.beginNextChapterForSpeech() {
                 engine.updateMetadata(title: viewModel.book.title, subtitle: viewModel.chapterTitle)
                 engine.speak(nextChapter)
+            } else if viewModel.isManuallyMovedRecently {
+                // 刚好在句末翻了页：realign 会在 0.3 秒后从新页接手。
+                // 这里如果照常走"全书读完"的收尾，就会把朗读停掉——就是那个"翻页后不出声"。
+                return
             } else {
                 engine.stop()
                 viewModel.endSpeech()
@@ -719,7 +723,9 @@ struct NovelReaderView: View {
         engine.onRemotePause = { [weak engine] in engine?.pause() }
         engine.onRemoteNext = { [weak engine, weak viewModel] in
             guard let engine, let viewModel else { return }
-            if let next = viewModel.advanceSpeechText() { engine.speak(next) }
+            if let next = viewModel.advanceSpeechText(respectsManualMove: false) {
+                engine.speak(next)
+            }
         }
         engine.onRemotePrevious = { [weak engine, weak viewModel] in
             guard let engine, let viewModel else { return }
@@ -785,10 +791,10 @@ struct NovelReaderView: View {
             restartListeningFromCurrentPage()
             return
         }
-        if let text = model.advanceSpeechText() {
+        if let text = model.advanceSpeechText(respectsManualMove: false) {
             speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
             speech.speak(text)
-        } else if let next = model.beginNextChapterForSpeech() {
+        } else if let next = model.beginNextChapterForSpeech(respectsManualMove: false) {
             speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
             speech.speak(next)
         }
@@ -828,6 +834,15 @@ struct NovelReaderView: View {
 
     // MARK: 菜单
 
+    // 菜单的底色、文字、分隔线全部取自当前阅读主题。
+    // 以前顶栏用 #F4F6F8、底栏用纯白，正文是 #F8F9FA——三种灰叠在一起，
+    // 上下各出现一道突兀的分层。统一成正文底色之后只剩一条细线。
+    private var chromeText: Color { model.theme.textColor }
+    private var chromeMuted: Color { model.theme.textColor.opacity(0.6) }
+    private var chromeFaint: Color { model.theme.textColor.opacity(0.4) }
+    private var chromeLine: Color { model.theme.textColor.opacity(0.07) }
+    private var chromeFill: Color { model.theme.textColor.opacity(0.06) }
+
     private func menuLayer(size: CGSize) -> some View {
         VStack {
             topBar
@@ -861,6 +876,9 @@ struct NovelReaderView: View {
             isStopped: !model.isSpeechPrepared,
             status: model.speechStatusText,
             detail: sleepLabel ?? model.speechDetailText,
+            tint: model.theme.background,
+            ink: model.theme.textColor,
+            line: chromeLine,
             onPreviousChapter: {
                 model.jump(toChapter: model.chapterIndex - 1)
                 restartSpeechFromCurrentPage()
@@ -904,12 +922,12 @@ struct NovelReaderView: View {
             Button { closeReader() } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Palette.ink2)
+                    .foregroundStyle(chromeMuted)
                     .frame(width: 36, height: 36)
             }
             Text(model.chapterTitle)
                 .font(.system(size: 12.5))
-                .foregroundStyle(Palette.ink3)
+                .foregroundStyle(chromeFaint)
                 .lineLimit(1)
             Spacer()
             Button {
@@ -925,7 +943,7 @@ struct NovelReaderView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-        .glassTopBar()
+        .glassTopBar(tint: model.theme.background, tintOpacity: 0.94, line: chromeLine)
     }
 
     private var sideButtons: some View {
@@ -955,12 +973,12 @@ struct NovelReaderView: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(highlighted ? Color.white : Palette.ink2)
+                .foregroundStyle(highlighted ? Color.white : chromeMuted)
                 .frame(width: 40, height: 40)
-                .background(highlighted ? Palette.accent : Palette.surface.opacity(0.94))
+                .background(highlighted ? Palette.accent : chromeFill)
                 .clipShape(Circle())
                 .overlay {
-                    Circle().strokeBorder(highlighted ? Color.clear : Palette.line, lineWidth: 1)
+                    Circle().strokeBorder(highlighted ? Color.clear : chromeLine, lineWidth: 1)
                 }
         }
         .buttonStyle(.plain)
@@ -971,7 +989,7 @@ struct NovelReaderView: View {
             HStack(spacing: 12) {
                 Button("上一章") { model.jump(toChapter: model.chapterIndex - 1) }
                     .font(.system(size: 12.5))
-                    .foregroundStyle(Palette.ink2)
+                    .foregroundStyle(chromeMuted)
 
                 Slider(
                     value: Binding(
@@ -989,7 +1007,7 @@ struct NovelReaderView: View {
 
                 Button("下一章") { model.jump(toChapter: model.chapterIndex + 1) }
                     .font(.system(size: 12.5))
-                    .foregroundStyle(Palette.ink2)
+                    .foregroundStyle(chromeMuted)
             }
             .padding(.horizontal, 20)
 
@@ -1011,7 +1029,7 @@ struct NovelReaderView: View {
         }
         .padding(.top, 12)
         .padding(.bottom, 30)
-        .glassBottomPanel()
+        .glassBottomPanel(tint: model.theme.background, tintOpacity: 0.94, line: chromeLine)
     }
 
     private func panelItem(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {
@@ -1020,7 +1038,7 @@ struct NovelReaderView: View {
                 Image(systemName: symbol).font(.system(size: 19))
                 Text(title).font(.system(size: 10))
             }
-            .foregroundStyle(Palette.ink2)
+            .foregroundStyle(chromeMuted)
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)

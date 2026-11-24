@@ -67,6 +67,12 @@ final class SpeechEngine: NSObject, ObservableObject {
     /// 被我们主动打断的那一条。它的 didCancel 不该触发"重念"，否则会和新语音打架。
     private var interruptingUtterance: AVSpeechUtterance?
 
+    /// 每条 utterance 开口时的代次。用来识别"迟到的完成通知"：
+    /// 用户在这句念完的同一瞬间翻了页，等这条 didFinish 走到主线程时，
+    /// 队列已经按新页重建过了——再让它推进一句，就会把新页第一句跳过去，
+    /// 或者走到"本章读完"去把整个朗读停掉。
+    private var utteranceGenerations: [ObjectIdentifier: Int] = [:]
+
     // MARK: 静音保活
     //
     // 只用 AVSpeechSynthesizer 时，系统有时不把这段输出当成"媒体播放"，
@@ -167,6 +173,7 @@ final class SpeechEngine: NSObject, ObservableObject {
             self.activateAudioSession()
             self.startSilentKeeper()
             self.currentUtterance = utterance
+            self.utteranceGenerations[ObjectIdentifier(utterance)] = generation
             self.synthesizer.speak(utterance)
             self.isSpeaking = true
             self.isPaused = false
@@ -175,9 +182,14 @@ final class SpeechEngine: NSObject, ObservableObject {
 
         armWatchdogs(for: trimmed, generation: generation)
 
-        if synthesizer.isSpeaking || synthesizer.isPaused {
+        if (synthesizer.isSpeaking || synthesizer.isPaused), currentUtterance != nil {
+            // 真的有另一条在念：主动打断
             interruptingUtterance = currentUtterance
             synthesizer.stopSpeaking(at: .immediate)
+            DispatchQueue.main.async(execute: start)
+        } else if synthesizer.isSpeaking {
+            // 刚 didFinish、引擎内部还没收尾。此时 stop 会让它进入不回调的状态，
+            // 表现就是"句末接下一句时卡住"。放到下一个 runloop 直接开口。
             DispatchQueue.main.async(execute: start)
         } else {
             start()
@@ -245,6 +257,8 @@ final class SpeechEngine: NSObject, ObservableObject {
         startWatchdog?.cancel()
         finishWatchdog?.cancel()
         interruptingUtterance = nil
+        currentUtterance = nil
+        utteranceGenerations.removeAll()
         stopSilentKeeper()
         synthesizer.stopSpeaking(at: .immediate)
         synthesizer.delegate = nil
@@ -333,6 +347,8 @@ final class SpeechEngine: NSObject, ObservableObject {
         stallRecoveries = 0
         currentText = nil
         interruptingUtterance = nil
+        currentUtterance = nil
+        utteranceGenerations.removeAll()
         stopSilentKeeper()
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
@@ -493,6 +509,13 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
             self.startWatchdog?.cancel()
             self.finishWatchdog?.cancel()
             self.isSpeaking = false
+            self.currentUtterance = nil
+
+            // 这条通知是否还属于最新的一次开口？用户翻页/跳章会触发新的 speak，
+            // 代次已经变了，旧回调不能再推进队列。
+            let generation = self.utteranceGenerations.removeValue(forKey: ObjectIdentifier(utterance))
+            guard generation == self.speechGeneration else { return }
+
             // 已经 stop 过就不要再接下一句。退出阅读器时最怕这个：
             // 用户已经回到书架，声音却从下一章重新冒出来。
             guard self.isPlaybackRequested else { return }
@@ -507,6 +530,7 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
                 self.interruptingUtterance = nil
                 return
             }
+            self.utteranceGenerations.removeValue(forKey: ObjectIdentifier(utterance))
             guard utterance === self.currentUtterance else { return }
             self.isSpeaking = false
             self.isPaused = false
