@@ -193,17 +193,17 @@ public enum RuleRunner {
         case "outerHtml":
             return (try? element.outerHtml()) ?? ""
         case "href":
-            return resolveURL(element.attr("href"), baseUrl: baseUrl)
+            return resolveURL((try? element.attr("href")) ?? "", baseUrl: baseUrl)
         case "src":
-            let src = element.attr("src")
+            let src = (try? element.attr("src")) ?? ""
             if !src.isEmpty { return resolveURL(src, baseUrl: baseUrl) }
             // 常见懒加载：src 为空时取 data-src / data-original
-            let lazy = element.attr("data-src")
+            let lazy = (try? element.attr("data-src")) ?? ""
             if !lazy.isEmpty { return resolveURL(lazy, baseUrl: baseUrl) }
-            let original = element.attr("data-original")
+            let original = (try? element.attr("data-original")) ?? ""
             return resolveURL(original, baseUrl: baseUrl)
         default:
-            let raw = element.attr(attribute ?? "")
+            let raw = (try? element.attr(attribute ?? "")) ?? ""
             // 属性值里如果是相对地址也顺手补全
             if raw.hasPrefix("/") || raw.hasPrefix("./") || raw.hasPrefix("../") {
                 return resolveURL(raw, baseUrl: baseUrl)
