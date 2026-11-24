@@ -1,6 +1,27 @@
 import SwiftUI
 import ReaderCore
 
+/// 书架上所有「需要弹出来的东西」都走这一个入口。
+/// 原因：同一个视图上挂多个 `.sheet` / `.confirmationDialog` 会互相抢占，
+/// 表现出来就是「点了没反应」。合成一个状态机之后不存在这个隐患。
+private enum ShelfPresentation: Identifiable {
+    case importMenu
+    case picker
+    case groupManager
+    case report(ImportReport)
+    case delete(Book)
+
+    var id: String {
+        switch self {
+        case .importMenu: return "importMenu"
+        case .picker: return "picker"
+        case .groupManager: return "groupManager"
+        case .report: return "report"
+        case .delete(let book): return "delete-\(book.id)"
+        }
+    }
+}
+
 struct ShelfView: View {
     @EnvironmentObject private var env: AppEnvironment
 
@@ -9,12 +30,10 @@ struct ShelfView: View {
     @State private var filter: ShelfFilter = .all
     @State private var sort: ShelfSort = .lastRead
     @State private var groups: [BookGroup] = []
-    @State private var showingGroupManager = false
-    @State private var activeBook: Book?
-    @State private var showingDeleteConfirm = false
-    @State private var showingImporter = false
+
+    @State private var presentation: ShelfPresentation?
     @State private var isImporting = false
-    @State private var report: ImportReport?
+    @State private var lastReport: ImportReport?
     @State private var importError: String?
 
     private let columns = [
@@ -30,32 +49,31 @@ struct ShelfView: View {
             VStack(spacing: 0) {
                 header
                 chips
+                banners
                 content
             }
         }
         .navigationBarHidden(true)
         .task { reload() }
         .onAppear { reload() }
-        .confirmationDialog("删除这本书？", isPresented: $showingDeleteConfirm, titleVisibility: .visible) {
-            Button("只删记录，保留文件") { deleteActive(removeFiles: false) }
-            Button("删除记录和文件", role: .destructive) { deleteActive(removeFiles: true) }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("只删记录时，原文件仍留在 App 内。")
+        .sheet(item: Binding(
+            get: { presentation.flatMap { isSheet($0) ? $0 : nil } },
+            set: { presentation = $0 }
+        )) { item in
+            sheetContent(for: item)
         }
-        .sheet(isPresented: $showingGroupManager) {
-            GroupManagerSheet(groups: groups, onChanged: reload)
-                .environmentObject(env)
-        }
-        .fileImporter(
-            isPresented: $showingImporter,
-            allowedContentTypes: ImportTypes.all,
-            allowsMultipleSelection: true
-        ) { result in
-            handleImport(result)
-        }
-        .sheet(item: $report) { report in
-            ImportResultSheet(report: report)
+        .confirmationDialog(
+            dialogTitle,
+            isPresented: Binding(
+                get: { presentation != nil && isDialog(presentation) },
+                set: { if !$0 { presentation = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: presentation
+        ) { item in
+            dialogButtons(for: item)
+        } message: { item in
+            dialogMessage(for: item)
         }
         .alert("导入失败", isPresented: Binding(
             get: { importError != nil },
@@ -84,6 +102,113 @@ struct ShelfView: View {
         }
     }
 
+    // MARK: 呈现分派
+
+    @ViewBuilder
+    private func sheetContent(for item: ShelfPresentation) -> some View {
+        switch item {
+        case .picker:
+            DocumentPicker(
+                types: ImportTypes.all,
+                allowsMultipleSelection: true,
+                onPick: { urls in
+                    presentation = nil
+                    env.importLog.append("选择器返回 \(urls.count) 个文件")
+                    startImport(urls: urls, archiveOriginals: true)
+                },
+                onCancel: {
+                    presentation = nil
+                    env.importLog.append("选择器被取消")
+                }
+            )
+            .ignoresSafeArea()
+
+        case .groupManager:
+            GroupManagerSheet(groups: groups, onChanged: reload)
+                .environmentObject(env)
+
+        case .report(let report):
+            ImportResultSheet(report: report)
+
+        case .importMenu, .delete:
+            EmptyView()
+        }
+    }
+
+    private func isSheet(_ item: ShelfPresentation) -> Bool {
+        switch item {
+        case .picker, .groupManager, .report: return true
+        case .importMenu, .delete: return false
+        }
+    }
+
+    private func isDialog(_ item: ShelfPresentation?) -> Bool {
+        switch item {
+        case .importMenu, .delete: return true
+        default: return false
+        }
+    }
+
+    private var dialogTitle: String {
+        if case .delete = presentation { return "删除这本书？" }
+        return "导入书籍"
+    }
+
+    @ViewBuilder
+    private func dialogButtons(for item: ShelfPresentation) -> some View {
+        switch item {
+        case .importMenu:
+            Button("从文件选择…") {
+                env.importLog.append("点击「从文件选择」")
+                presentation = nil
+                afterDismiss { presentation = .picker }
+            }
+            Button("扫描 App 目录") {
+                env.importLog.append("点击「扫描 App 目录」")
+                presentation = nil
+                scanAndImport()
+            }
+            Button("载入示例书（诊断用）") {
+                presentation = nil
+                importSample()
+            }
+            Button("查看导入日志") {
+                presentation = nil
+                let log = ImportReport(outcomes: [], logTail: tailOfLog())
+                afterDismiss { presentation = .report(log) }
+            }
+            Button("取消", role: .cancel) { presentation = nil }
+
+        case .delete(let book):
+            Button("只删记录，保留文件") {
+                presentation = nil
+                delete(book, removeFiles: false)
+            }
+            Button("删除记录和文件", role: .destructive) {
+                presentation = nil
+                delete(book, removeFiles: true)
+            }
+            Button("取消", role: .cancel) { presentation = nil }
+
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func dialogMessage(for item: ShelfPresentation) -> some View {
+        switch item {
+        case .importMenu:
+            Text("支持 txt / epub / pdf / cbz / zip。也可以把书拷进「文件」App 里「私阅读」文件夹，再用扫描。")
+        case .delete:
+            Text("只删记录时，原文件仍留在 App 内。")
+        default:
+            EmptyView()
+        }
+    }
+
+    // MARK: 顶部
+
     private var header: some View {
         HStack(alignment: .bottom) {
             VStack(alignment: .leading, spacing: 3) {
@@ -94,12 +219,12 @@ struct ShelfView: View {
             }
             Spacer()
             HStack(spacing: 9) {
-                iconButton("plus") { showingImporter = true }
+                iconButton("plus") { presentation = .importMenu }
                 iconButton("arrow.up.arrow.down") {
                     sort = sort == .lastRead ? .title : .lastRead
                     reload()
                 }
-                Button { showingGroupManager = true } label: {
+                Button { presentation = .groupManager } label: {
                     Image(systemName: "ellipsis").font(.system(size: 17))
                         .foregroundStyle(Palette.ink2)
                         .frame(width: 36, height: 36)
@@ -155,15 +280,88 @@ struct ShelfView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: 提示条
+
+    @ViewBuilder
+    private var banners: some View {
+        if let message = env.startupMessage {
+            banner(
+                icon: "exclamationmark.triangle.fill",
+                tint: Palette.danger,
+                text: message,
+                onDetail: nil,
+                onClose: nil
+            )
+        }
+
+        if let report = lastReport {
+            banner(
+                icon: report.failureCount == 0 ? "checkmark.circle.fill" : "exclamationmark.circle.fill",
+                tint: report.failureCount == 0 ? Palette.accent : Palette.danger,
+                text: "导入完成：成功 \(report.successCount)" + (report.failureCount > 0 ? "，失败 \(report.failureCount)" : ""),
+                onDetail: { presentation = .report(report) },
+                onClose: { lastReport = nil }
+            )
+        }
+    }
+
+    private func banner(icon: String,
+                        tint: Color,
+                        text: String,
+                        onDetail: (() -> Void)?,
+                        onClose: (() -> Void)?) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: icon).font(.system(size: 14)).foregroundStyle(tint)
+            Text(text)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink2)
+                .lineLimit(3)
+            Spacer(minLength: 0)
+            if let onDetail {
+                Button("详情", action: onDetail)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+            }
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Palette.ink3)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(tint.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .padding(.horizontal, Spacing.xl)
+        .padding(.bottom, 12)
+    }
+
+    // MARK: 内容
+
     @ViewBuilder
     private var content: some View {
         if books.isEmpty {
-            EmptyStateView(
-                symbol: "books.vertical",
-                title: "书架还是空的",
-                message: "从本地导入文件，或者去发现页找书"
-            )
-            Spacer()
+            VStack(spacing: 4) {
+                EmptyStateView(
+                    symbol: "books.vertical",
+                    title: "书架还是空的",
+                    message: "支持 txt / epub / pdf / cbz / zip"
+                )
+                Button("导入第一本书") { presentation = .importMenu }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .padding(.horizontal, 64)
+
+                Text("也可以把书拷进「文件」App 的「私阅读」文件夹，再点右上角 + 选「扫描 App 目录」")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Palette.ink3)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                    .padding(.top, 14)
+                Spacer()
+            }
         } else {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 18) {
@@ -184,8 +382,7 @@ struct ShelfView: View {
                             Button(book.groupId == BookGroup.builtinDroppedID ? "移回在追" : "标记弃读") { toggleDropped(book) }
                             Divider()
                             Button("删除", role: .destructive) {
-                                activeBook = book
-                                showingDeleteConfirm = true
+                                presentation = .delete(book)
                             }
                         }
                     }
@@ -211,32 +408,96 @@ struct ShelfView: View {
             progressByBook = map
         } catch {
             books = []
+            env.importLog.append("读取书架失败：\(error.localizedDescription)")
         }
     }
 
-    private func handleImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .failure(let error):
-            importError = error.localizedDescription
-        case .success(let urls):
-            guard !urls.isEmpty else { return }
-            isImporting = true
-            let library = env.library
-            ImportRunner.run(urls: urls, library: library) { outcome in
-                isImporting = false
-                reload()
-                if outcome.outcomes.isEmpty {
-                    return
-                }
-                report = outcome
+    // MARK: 导入
+
+    private func scanAndImport() {
+        let urls = DirectoryScanner.scan(root: env.paths.root)
+        env.importLog.append("扫描 \(env.paths.root.path)，命中 \(urls.count) 个文件")
+
+        guard !urls.isEmpty else {
+            importError = "App 目录里没找到可导入的文件。\n\n把书拷进「文件」App 里的「私阅读」文件夹，或者直接用「从文件选择」。"
+            return
+        }
+        startImport(urls: urls, archiveOriginals: true)
+    }
+
+    private func startImport(urls: [URL], archiveOriginals: Bool) {
+        guard !urls.isEmpty else { return }
+        isImporting = true
+        lastReport = nil
+
+        let library = env.library
+        let log = env.importLog
+        let paths = env.paths
+
+        ImportRunner.run(
+            urls: urls,
+            library: library,
+            log: log,
+            paths: paths,
+            archiveOriginals: archiveOriginals
+        ) { result in
+            isImporting = false
+            reload()
+            if result.outcomes.isEmpty {
+                importError = "没有产生任何导入结果，请查看导入日志。"
+                presentation = .report(result)
+            } else {
+                lastReport = result
             }
         }
     }
 
-    private func deleteActive(removeFiles: Bool) {
-        guard let book = activeBook else { return }
+    /// 对话框关闭有一段动画，紧接着换呈现会被吞掉，所以推迟一点。
+    private func afterDismiss(_ action: @escaping () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: action)
+    }
+
+    /// 内置一本三章的示例书。
+    /// 作用是把问题切开：如果示例能导入并阅读，说明书架、数据库、阅读器都是好的，
+    /// 问题只出在文件选择器或文件权限上；如果连示例都进不去，那是更底层的问题。
+    private func importSample() {
+        let text = """
+        第一章 起
+
+        这是一本用来验证导入与阅读链路的示例书。它不经过文件选择器，直接由 App 生成。
+
+        如果你能看到这一章，说明解析、入库、书架、阅读器都是通的。
+
+        第二章 承
+
+        第二段正文。翻页、进度、书签、字号都可以在这一章里试。
+
+        第三章 转
+
+        读到这一章，说明跨章翻页也正常。示例书可以随手删掉，不影响其他书。
+        """
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("示例书.txt")
+        do {
+            try text.data(using: .utf8)?.write(to: url)
+        } catch {
+            importError = "示例书写入失败：\(error.localizedDescription)"
+            return
+        }
+        env.importLog.append("载入内置示例书（诊断）")
+        startImport(urls: [url], archiveOriginals: false)
+    }
+
+    private func tailOfLog() -> String {
+        let text = env.importLog.read()
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.count > 60 { lines = Array(lines.suffix(60)) }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: 书籍操作
+
+    private func delete(_ book: Book, removeFiles: Bool) {
         try? env.library.delete(book, removeFiles: removeFiles)
-        activeBook = nil
         reload()
     }
 

@@ -53,3 +53,24 @@
 ## 下一步：M5 朗读
 
 要先说清楚：**CI 只能验证编译，验证不了出声**。AVSpeechSynthesizer、锁屏控制、句级高亮的实际效果必须在真机上听。能自动化测的只有句子切分算法本身。
+
+
+## 安装包（未签名）
+
+`dist/PrivateReader-unsigned.ipa`，由 GitHub Actions 的 `IPA` 流水线产出：
+
+- 平台：iOS 16.0+，仅 arm64、仅 iPhone 竖屏
+- Bundle ID：`com.dmj654.privatereader`（重签时不要改，改了数据就没了）
+- 大小：约 4.0 MB
+- 内容：M0–M4 全部功能 + 本地导入 + 应用图标
+
+**未签名，必须自行签名后才能装。** 产包里没有 `_CodeSignature` 与 `embedded.mobileprovision`，
+这是 Apple 的设计，不是构建缺失。
+
+## M4 之外的补齐（为出包临时追加）
+
+- 书架「+」接系统文件选择器，真正能导入（此前解析器有了但没有入口）
+- 导入结果清单，逐文件报成功/失败
+- 漫画详情页给明确提示，不再错误进入小说阅读器
+- `UIFileSharingEnabled`，可从电脑批量拷书进 App 目录
+- 1024 应用图标

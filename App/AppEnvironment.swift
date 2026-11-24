@@ -16,6 +16,7 @@ final class AppEnvironment: ObservableObject {
     let cache: CacheRepository
     let library: LibraryService
     let chapterProvider: ChapterProvider
+    let importLog: ImportLog
 
     @Published var startupMessage: String?
 
@@ -43,6 +44,11 @@ final class AppEnvironment: ObservableObject {
         self.cache = CacheRepository(db: database.writer)
         self.library = LibraryService(books: BookRepository(db: database.writer), paths: paths)
         self.chapterProvider = ChapterProvider(paths: paths)
+        self.importLog = ImportLog(directory: paths.root)
         self.startupMessage = message
+
+        // 每次启动写一行，方便区分「这次是新装的」还是「上次的日志」
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        self.importLog.append("--- 启动 v\(version)，沙盒 \(paths.root.path) ---")
     }
 }
