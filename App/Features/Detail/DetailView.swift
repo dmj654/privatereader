@@ -223,37 +223,34 @@ struct DetailView: View {
                     .padding(.horizontal, Spacing.xl)
                     .padding(.bottom, 10)
             } else {
-                ForEach(Array(chapterTitles.prefix(8).enumerated()), id: \.offset) { index, title in
-                    Button {
-                        pendingChapter = index
-                        showReader = true
-                    } label: {
-                        HStack(spacing: 10) {
-                            Text(title)
-                                .font(Typo.body)
-                                .foregroundStyle(Palette.ink2)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Palette.ink3.opacity(0.6))
+                // 整本列出来，不再只给前 8 章——目录看不全等于没有目录。
+                // LazyVStack 保证几百章也不会一次性建视图。
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(chapterTitles.enumerated()), id: \.offset) { index, title in
+                        Button {
+                            pendingChapter = index
+                            showReader = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Text(title)
+                                    .font(Typo.body)
+                                    .foregroundStyle(Palette.ink2)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Palette.ink3.opacity(0.6))
+                            }
+                            .padding(.horizontal, Spacing.xl)
+                            .padding(.vertical, 14)
+                            .background(Palette.surface)
+                            .overlay(alignment: .bottom) {
+                                Rectangle().fill(Color(hex: 0xF3F6F9)).frame(height: 1)
+                            }
                         }
-                        .padding(.horizontal, Spacing.xl)
-                        .padding(.vertical, 14)
-                        .background(Palette.surface)
-                        .overlay(alignment: .bottom) {
-                            Rectangle().fill(Color(hex: 0xF3F6F9)).frame(height: 1)
-                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                }
-
-                if chapterTitles.count > 8 {
-                    Text("共 \(chapterTitles.count) 章，全部在阅读器的目录里")
-                        .font(Typo.micro)
-                        .foregroundStyle(Palette.ink3)
-                        .padding(.horizontal, Spacing.xl)
-                        .padding(.top, 12)
                 }
             }
         }

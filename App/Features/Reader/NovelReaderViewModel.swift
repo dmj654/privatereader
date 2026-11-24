@@ -167,6 +167,19 @@ final class NovelReaderViewModel: ObservableObject {
         persistProgress()
     }
 
+    /// 取相邻页的富文本，给翻页动画用：新页要提前画出来，才能和旧页同时在场。
+    /// 只在本章内可用；跨章返回 nil，调用方退化成淡入淡出。
+    func pageText(offset: Int) -> NSAttributedString? {
+        guard let chapter = currentChapter else { return nil }
+        let target = pageIndex + offset
+        guard pageRanges.indices.contains(target) else { return nil }
+
+        let attributed = attributedBody(for: chapter)
+        let range = pageRanges[target]
+        guard range.location + range.length <= attributed.length else { return nil }
+        return attributed.attributedSubstring(from: range)
+    }
+
     /// 还能不能往这个方向翻。翻不动时不要再播动画，否则会出现"滑走又滑回原样"的怪现象。
     func canTurn(by delta: Int) -> Bool {
         guard !chapters.isEmpty else { return false }

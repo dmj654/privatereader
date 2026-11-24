@@ -71,13 +71,49 @@ final class ProgressMathTests: XCTestCase {
 }
 
 final class ReaderStyleTests: XCTestCase {
-    func testNormalizedBodyIndentsAndCollapsesBlankLines() {
+    func testNormalizedBodyCollapsesBlankLinesWithoutPadding() {
         let raw = "第一段\n\n\n第二段\r\n  \n第三段"
         let normalized = ReaderStyle.normalizedBody(raw)
         let lines = normalized.components(separatedBy: "\n")
         XCTAssertEqual(lines.count, 3)
-        XCTAssertTrue(lines[0].hasPrefix("　　"))
-        XCTAssertEqual(lines[1], "　　第二段")
+        // 缩进由 paragraphStyle 负责，正文里不能再塞全角空格，否则缩进会变成四格
+        XCTAssertEqual(lines[0], "第一段")
+        XCTAssertEqual(lines[1], "第二段")
+        XCTAssertFalse(normalized.contains("　　"))
+    }
+
+    func testIndentWidthFollowsFontSize() {
+        XCTAssertEqual(ReaderStyle(fontSize: 20, indentFirstLine: true).indentWidth, 40, accuracy: 0.01)
+        XCTAssertEqual(ReaderStyle(fontSize: 20, indentFirstLine: false).indentWidth, 0, accuracy: 0.01)
+    }
+
+    func testParagraphStyleReflectsIndentAndAlignment() throws {
+        let indented = ReaderStyle(fontSize: 18, indentFirstLine: true, justified: true)
+        let attributes = indented.attributes(color: CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        let paragraph = try XCTUnwrap(attributes[.paragraphStyle] as? NSParagraphStyle)
+        XCTAssertEqual(paragraph.firstLineHeadIndent, 36, accuracy: 0.5)
+        XCTAssertEqual(paragraph.alignment, .justified)
+
+        let plain = ReaderStyle(fontSize: 18, indentFirstLine: false)
+        let plainAttributes = plain.attributes(color: CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        let plainParagraph = try XCTUnwrap(plainAttributes[.paragraphStyle] as? NSParagraphStyle)
+        XCTAssertEqual(plainParagraph.firstLineHeadIndent, 0, accuracy: 0.01)
+    }
+
+    func testLetterSpacingBecomesKern() throws {
+        let spaced = ReaderStyle(letterSpacing: 1.2)
+        let attributes = spaced.attributes(color: CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        XCTAssertEqual(try XCTUnwrap(attributes[.kern] as? Double), 1.2, accuracy: 0.001)
+
+        let normal = ReaderStyle(letterSpacing: 0)
+        XCTAssertNil(normal.attributes(color: CGColor(red: 0, green: 0, blue: 0, alpha: 1))[.kern])
+    }
+
+    func testFontResolutionFallsBackInsteadOfFailing() {
+        for family in ReaderFontFamily.allCases {
+            let style = ReaderStyle(fontSize: 17, fontFamily: family)
+            XCTAssertGreaterThan(CTFontGetSize(style.font()), 16.9, "\(family.title) 必须能解析出字体")
+        }
     }
 
     func testAttributesCarryFontAndColor() {

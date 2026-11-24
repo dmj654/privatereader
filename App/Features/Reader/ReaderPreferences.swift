@@ -22,10 +22,10 @@ enum PageTurnMode: String, CaseIterable, Codable, Identifiable {
 
     var detail: String {
         switch self {
-        case .none: return "立刻换页，最省电，眼睛不累"
+        case .none: return "立刻换页，最省电"
         case .fade: return "旧页淡出、新页淡入，最安静"
         case .slide: return "新页从侧面推进来，方向感明确"
-        case .follow: return "拖动时页面跟手指走，松手才翻"
+        case .follow: return "拖动时两页一起跟手指走，松手才落地"
         }
     }
 }
@@ -54,36 +54,91 @@ enum TapAction: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum TapZone: String, CaseIterable {
-    case left
-    case center
-    case right
+/// 屏幕九宫格。每个格子可以单独指定功能。
+enum TapZone: String, CaseIterable, Codable, Identifiable {
+    case topLeft, topCenter, topRight
+    case middleLeft, center, middleRight
+    case bottomLeft, bottomCenter, bottomRight
+
+    var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .left: return "左侧 1/3"
-        case .center: return "中间 1/3"
-        case .right: return "右侧 1/3"
+        case .topLeft: return "左上"
+        case .topCenter: return "中上"
+        case .topRight: return "右上"
+        case .middleLeft: return "中左"
+        case .center: return "正中"
+        case .middleRight: return "中右"
+        case .bottomLeft: return "左下"
+        case .bottomCenter: return "中下"
+        case .bottomRight: return "右下"
         }
     }
+
+    var column: Int {
+        switch self {
+        case .topLeft, .middleLeft, .bottomLeft: return 0
+        case .topCenter, .center, .bottomCenter: return 1
+        case .topRight, .middleRight, .bottomRight: return 2
+        }
+    }
+
+    static let grid: [[TapZone]] = [
+        [.topLeft, .topCenter, .topRight],
+        [.middleLeft, .center, .middleRight],
+        [.bottomLeft, .bottomCenter, .bottomRight]
+    ]
 }
 
 struct TapZoneConfig: Codable, Equatable {
-    var left: TapAction = .previousPage
-    var center: TapAction = .toggleMenu
-    var right: TapAction = .nextPage
+    private var actions: [String: TapAction]
 
-    func action(for zone: TapZone) -> TapAction {
-        switch zone {
-        case .left: return left
-        case .center: return center
-        case .right: return right
+    init() {
+        var map: [String: TapAction] = [:]
+        for zone in TapZone.allCases {
+            map[zone.rawValue] = Self.defaultAction(for: zone)
+        }
+        actions = map
+    }
+
+    /// 默认：左列翻上一页、右列翻下一页、中列呼菜单。
+    /// 中间一整列都给菜单，是因为九宫格中间那一格很小，要求用户精确点在中心不现实。
+    static func defaultAction(for zone: TapZone) -> TapAction {
+        switch zone.column {
+        case 0: return .previousPage
+        case 2: return .nextPage
+        default: return .toggleMenu
         }
     }
 
-    /// 三个区域不能全设成「无动作」，否则点哪儿都没反应，用户会以为卡住。
+    subscript(zone: TapZone) -> TapAction {
+        get { actions[zone.rawValue] ?? .none }
+        set { actions[zone.rawValue] = newValue }
+    }
+
     var isUsable: Bool {
-        [left, center, right].contains { $0 != .none }
+        TapZone.allCases.contains { self[$0] != .none }
+    }
+
+    // 手写 Codable：某个键缺失时补默认值，而不是整份配置解码失败。
+    private enum CodingKeys: String, CodingKey {
+        case actions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let stored = (try? container.decode([String: TapAction].self, forKey: .actions)) ?? [:]
+        var map: [String: TapAction] = [:]
+        for zone in TapZone.allCases {
+            map[zone.rawValue] = stored[zone.rawValue] ?? Self.defaultAction(for: zone)
+        }
+        actions = map
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(actions, forKey: .actions)
     }
 }
 
@@ -91,11 +146,23 @@ struct TapZoneConfig: Codable, Equatable {
 
 /// 阅读器的交互偏好。放 UserDefaults，不进数据库——它不是书的内容，重装也愿意重设。
 final class ReaderPreferences: ObservableObject {
-    private static let storageKey = "reader.preferences.v1"
+    private static let keyV2 = "reader.preferences.v2"
+    private static let keyV1 = "reader.preferences.v1"
 
     private struct Snapshot: Codable {
         var pageTurn: PageTurnMode
         var zones: TapZoneConfig
+    }
+
+    /// 第一版的旧结构：三个横向大区。用来做一次迁移。
+    private struct SnapshotV1: Codable {
+        struct Zones: Codable {
+            var left: TapAction
+            var center: TapAction
+            var right: TapAction
+        }
+        var pageTurn: PageTurnMode
+        var zones: Zones
     }
 
     @Published var pageTurn: PageTurnMode {
@@ -107,19 +174,36 @@ final class ReaderPreferences: ObservableObject {
     }
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+        if let data = UserDefaults.standard.data(forKey: Self.keyV2),
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
-            self.pageTurn = snapshot.pageTurn
-            self.zones = snapshot.zones
-        } else {
-            self.pageTurn = .slide
-            self.zones = TapZoneConfig()
+            pageTurn = snapshot.pageTurn
+            zones = snapshot.zones
+            return
         }
+
+        if let data = UserDefaults.standard.data(forKey: Self.keyV1),
+           let old = try? JSONDecoder().decode(SnapshotV1.self, from: data) {
+            pageTurn = old.pageTurn
+            var migrated = TapZoneConfig()
+            for zone in TapZone.allCases {
+                switch zone.column {
+                case 0: migrated[zone] = old.zones.left
+                case 2: migrated[zone] = old.zones.right
+                default: migrated[zone] = old.zones.center
+                }
+            }
+            zones = migrated
+            persist()
+            return
+        }
+
+        pageTurn = .slide
+        zones = TapZoneConfig()
     }
 
     private func persist() {
         let snapshot = Snapshot(pageTurn: pageTurn, zones: zones)
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        UserDefaults.standard.set(data, forKey: Self.keyV2)
     }
 }
