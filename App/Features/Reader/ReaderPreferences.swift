@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import ReaderCore
 
 // MARK: - 翻页动画
 
