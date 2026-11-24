@@ -82,7 +82,11 @@ public enum EpubParser {
     private static func extractText(from data: Data) -> String {
         guard let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1),
               let document = try? SwiftSoup.parse(html) else { return "" }
-        document.select("script, style").forEach { try? $0.remove() }
+        if let removable = try? document.select("script, style") {
+            for element in removable {
+                try? element.remove()
+            }
+        }
         let text = (try? document.text()) ?? ""
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
