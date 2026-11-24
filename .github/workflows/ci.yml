@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tests:
+    name: ReaderCore 单元测试
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: 工具链版本
+        run: swift --version
+      - name: 运行测试
+        run: swift test --package-path ReaderCore
+
+  app-build:
+    name: App 编译
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+      - name: 生成工程
+        run: xcodegen generate
+      - name: 编译 iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild -project PrivateReader.xcodeproj \
+            -scheme PrivateReader \
+            -destination 'generic/platform=iOS Simulator' \
+            -sdk iphonesimulator \
+            CODE_SIGNING_ALLOWED=NO \
+            build
