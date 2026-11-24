@@ -22,6 +22,7 @@ public struct LibraryService {
         try fileManager.createDirectory(at: bookDirectory, withIntermediateDirectories: true)
 
         var coverPath: String?
+        var storedFilePath: String?
         var chapterCount = 0
         var type: BookType
         var title: String
@@ -38,6 +39,7 @@ public struct LibraryService {
             if fileManager.fileExists(atPath: destination.path) == false {
                 try? fileManager.copyItem(at: originalURL, to: destination)
             }
+            storedFilePath = relativePath(of: destination)
             if let coverData = novel.coverData {
                 let coverURL = paths.coverFile(id)
                 if CoverStore.write(from: coverData, to: coverURL) {
@@ -67,7 +69,7 @@ public struct LibraryService {
             title: title,
             author: author,
             coverPath: coverPath,
-            filePath: relativePath(of: bookDirectory.appendingPathComponent(originalURL.lastPathComponent)),
+            filePath: storedFilePath,
             groupId: BookGroup.builtinReadingID,
             chapterCount: chapterCount
         )
