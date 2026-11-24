@@ -1,0 +1,229 @@
+import SwiftUI
+import AVFoundation
+
+/// 朗读控制面板：双排。
+/// 上排管"读哪儿"——翻页、翻章、暂停；下排管"怎么读"——目录、设置、退出、人声、定时。
+/// 退出放正中做成主色胶囊：它是这一屏唯一"结束"的动作，值得被单独看见。
+struct SpeechPanel: View {
+    let isPaused: Bool
+    let status: String
+    let detail: String
+
+    let onPreviousChapter: () -> Void
+    let onPreviousPage: () -> Void
+    let onTogglePlay: () -> Void
+    let onNextPage: () -> Void
+    let onNextChapter: () -> Void
+
+    let onCatalog: () -> Void
+    let onSettings: () -> Void
+    let onExit: () -> Void
+    let onVoice: () -> Void
+    let onTimer: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Text(status)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(Palette.accent)
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.ink3)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+
+            HStack(spacing: 0) {
+                item("backward.end", "上一章", action: onPreviousChapter)
+                item("chevron.left", "上一页", action: onPreviousPage)
+                playButton
+                item("chevron.right", "下一页", action: onNextPage)
+                item("forward.end", "下一章", action: onNextChapter)
+            }
+            .padding(.horizontal, 8)
+
+            HStack(spacing: 0) {
+                item("list.bullet", "目录", action: onCatalog)
+                item("slider.horizontal.3", "设置", action: onSettings)
+
+                Button(action: onExit) {
+                    Text("退出")
+                        .font(.system(size: 14.5, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 92, height: 42)
+                        .background(Palette.accent)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 6)
+
+                item("waveform", "人声", action: onVoice)
+                item("timer", "定时", action: onTimer)
+            }
+            .padding(.horizontal, 8)
+        }
+        .padding(.top, 12)
+        .padding(.bottom, 30)
+        .glassBottomPanel()
+    }
+
+    private var playButton: some View {
+        Button(action: onTogglePlay) {
+            VStack(spacing: 5) {
+                ZStack {
+                    Circle()
+                        .fill(Palette.accent)
+                        .frame(width: 46, height: 46)
+                    Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                Text(isPaused ? "已暂停" : "播放中")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Palette.accent)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func item(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 18, weight: .regular))
+                    .frame(height: 22)
+                Text(title)
+                    .font(.system(size: 10))
+            }
+            .foregroundStyle(Palette.ink2)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// 人声与语速。
+struct VoiceSheet: View {
+    @ObservedObject var engine: SpeechEngine
+    @Environment(\.dismiss) private var dismiss
+
+    private var voices: [AVSpeechSynthesisVoice] {
+        SpeechEngine.chineseVoices()
+    }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Palette.bg.ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("语速")
+                                    .font(.system(size: 13.5))
+                                    .foregroundStyle(Palette.ink2)
+                                Spacer()
+                                Text(rateLabel)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(Palette.ink3)
+                            }
+                            Slider(value: $engine.rate, in: 0.35...0.65, step: 0.01)
+                                .tint(Palette.accent)
+                        }
+                        .padding(14)
+                        .background(Palette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(Palette.line, lineWidth: 1)
+                        }
+
+                        Text("音色")
+                            .font(.system(size: 13.5))
+                            .foregroundStyle(Palette.ink2)
+
+                        if voices.isEmpty {
+                            Text("系统里没有中文语音包，请到 设置 → 辅助功能 → 朗读内容 里下载")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(Palette.danger)
+                        } else {
+                            VStack(spacing: 0) {
+                                ForEach(voices, id: \.identifier) { voice in
+                                    Button {
+                                        engine.voiceIdentifier = voice.identifier
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(voice.name)
+                                                    .font(.system(size: 14))
+                                                    .foregroundStyle(Palette.ink)
+                                                Text(subtitle(for: voice))
+                                                    .font(.system(size: 11))
+                                                    .foregroundStyle(Palette.ink3)
+                                            }
+                                            Spacer(minLength: 0)
+                                            if isSelected(voice) {
+                                                Image(systemName: "checkmark")
+                                                    .font(.system(size: 13, weight: .semibold))
+                                                    .foregroundStyle(Palette.accent)
+                                            }
+                                        }
+                                        .padding(.horizontal, 14)
+                                        .frame(height: 52)
+                                        .contentShape(Rectangle())
+                                        .overlay(alignment: .bottom) {
+                                            Rectangle().fill(Color(hex: 0xF3F6F9)).frame(height: 1)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .background(Palette.surface)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(Palette.line, lineWidth: 1)
+                            }
+                        }
+
+                        Text("用的是系统语音，不联网、不上传正文。音质取决于 iOS 自带的中文语音包。")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Palette.ink3)
+                    }
+                    .padding(.horizontal, Spacing.xl)
+                    .padding(.vertical, Spacing.l)
+                }
+            }
+            .navigationTitle("人声")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var rateLabel: String {
+        String(format: "%.2f×", Double(engine.rate) / Double(AVSpeechUtteranceDefaultSpeechRate))
+    }
+
+    private func isSelected(_ voice: AVSpeechSynthesisVoice) -> Bool {
+        if let id = engine.voiceIdentifier { return id == voice.identifier }
+        return voice.identifier == SpeechEngine.defaultChineseVoice()?.identifier
+    }
+
+    private func subtitle(for voice: AVSpeechSynthesisVoice) -> String {
+        var parts = [voice.language]
+        switch voice.quality {
+        case .premium: parts.append("增强")
+        case .enhanced: parts.append("高品质")
+        default: break
+        }
+        return parts.joined(separator: " · ")
+    }
+}

@@ -13,11 +13,13 @@ private struct PendingFeature: Identifiable {
 private enum ReaderSheet: Identifiable {
     case catalog
     case settings(TypographySheet.Focus)
+    case voice
 
     var id: String {
         switch self {
         case .catalog: return "catalog"
         case .settings(let focus): return "settings-\(focus == .theme ? "theme" : "full")"
+        case .voice: return "voice"
         }
     }
 }
@@ -38,6 +40,10 @@ struct NovelReaderView: View {
     @State private var viewWidth: CGFloat = 390
     @State private var scrubValue: Double?
     @State private var editingZones = false
+    @StateObject private var speech = SpeechEngine()
+    @State private var sleepMinutes: Int?
+    @State private var sleepWorkItem: DispatchWorkItem?
+    @State private var showingTimerMenu = false
 
     init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
         _model = StateObject(wrappedValue: NovelReaderViewModel(
@@ -84,6 +90,7 @@ struct NovelReaderView: View {
             if phase != .active { model.persistProgress(force: true) }
         }
         .onDisappear {
+            stopSpeech()
             model.finishSession()
             if let seconds = model.pendingSessionDuration {
                 try? env.sessions.record(ReadingSession(bookId: model.book.id,
@@ -107,6 +114,11 @@ struct NovelReaderView: View {
                 .presentationDetents([.fraction(0.72), .large])
                 .presentationDragIndicator(.visible)
 
+            case .voice:
+                VoiceSheet(engine: speech)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+
             case .settings(let focus):
                 TypographySheet(
                     style: $model.style,
@@ -124,6 +136,15 @@ struct NovelReaderView: View {
                 .presentationDetents(detents(for: focus))
                 .presentationDragIndicator(.visible)
             }
+        }
+        .confirmationDialog("定时停止", isPresented: $showingTimerMenu, titleVisibility: .visible) {
+            ForEach([5, 15, 30, 60], id: \.self) { minutes in
+                Button("\(minutes) 分钟后停止") { scheduleSleepTimer(minutes: minutes) }
+            }
+            Button("关闭定时") { scheduleSleepTimer(minutes: nil) }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("到点会停下朗读，正文停在原处。")
         }
         .alert(
             pending?.title ?? "",
@@ -242,6 +263,7 @@ struct NovelReaderView: View {
         switch prefs.pageTurn {
         case .none:
             model.turnPage(by: direction)
+            followSpeechAfterManualMove()
         case .fade:
             crossFade(direction)
         case .slide, .follow:
@@ -256,6 +278,7 @@ struct NovelReaderView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.13) {
             model.turnPage(by: direction)
             withAnimation(.easeInOut(duration: 0.16)) { contentOpacity = 1 }
+            followSpeechAfterManualMove()
         }
     }
 
@@ -281,6 +304,7 @@ struct NovelReaderView: View {
             model.turnPage(by: direction)
             incomingText = nil
             contentOffset = 0
+            followSpeechAfterManualMove()
         }
     }
 
@@ -343,6 +367,7 @@ struct NovelReaderView: View {
                     model.turnPage(by: direction)
                     incomingText = nil
                     contentOffset = 0
+                    followSpeechAfterManualMove()
                 }
             }
     }
@@ -441,6 +466,89 @@ struct NovelReaderView: View {
         }
     }
 
+    // MARK: 朗读控制
+
+    private func startSpeech() {
+        guard let text = model.prepareSpeech() else {
+            pending = PendingFeature(
+                title: "这一章没有可朗读的文字",
+                detail: "章节内容可能是空的，或者还没加载完。"
+            )
+            return
+        }
+        wireSpeechCallbacks()
+        speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+        speech.speak(text)
+        withAnimation(.easeInOut(duration: 0.18)) { model.isMenuVisible = true }
+    }
+
+    /// 一句念完后自动接下一句；本章念完自动接下一章；全书念完就停。
+    private func wireSpeechCallbacks() {
+        let engine = speech
+        let viewModel = model
+
+        engine.onFinishUtterance = {
+            if let next = viewModel.advanceSpeechText() {
+                engine.updateMetadata(title: viewModel.book.title, subtitle: viewModel.chapterTitle)
+                engine.speak(next)
+            } else if let nextChapter = viewModel.beginNextChapterForSpeech() {
+                engine.updateMetadata(title: viewModel.book.title, subtitle: viewModel.chapterTitle)
+                engine.speak(nextChapter)
+            } else {
+                engine.stop()
+                viewModel.endSpeech()
+            }
+        }
+        engine.onRemotePlay = {
+            if engine.isPaused { engine.resume() }
+        }
+        engine.onRemotePause = { engine.pause() }
+        engine.onRemoteNext = {
+            if let next = viewModel.advanceSpeechText() { engine.speak(next) }
+        }
+        engine.onRemotePrevious = {
+            if let text = viewModel.rewindSpeechText() { engine.speak(text) }
+        }
+    }
+
+    /// 手动翻页、跳章之后，让朗读跟到新的位置。
+    private func followSpeechAfterManualMove() {
+        guard model.isSpeechPrepared else { return }
+        if let text = model.realignSpeechToCurrentPage() {
+            speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+            speech.speak(text)
+        }
+    }
+
+    /// 面板上的翻页 / 翻章之后，从新页的第一句重新念。
+    private func restartSpeechFromCurrentPage() {
+        guard model.isSpeechPrepared else { return }
+        if let text = model.prepareSpeech(startAtCurrentPage: true) {
+            speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+            speech.speak(text)
+        }
+    }
+
+    private func stopSpeech() {
+        speech.stop()
+        sleepWorkItem?.cancel()
+        sleepWorkItem = nil
+        sleepMinutes = nil
+        model.endSpeech()
+    }
+
+    private func scheduleSleepTimer(minutes: Int?) {
+        sleepWorkItem?.cancel()
+        sleepMinutes = minutes
+        guard let minutes else {
+            sleepWorkItem = nil
+            return
+        }
+        let item = DispatchWorkItem { stopSpeech() }
+        sleepWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(minutes) * 60, execute: item)
+    }
+
     // MARK: 菜单
 
     private func menuLayer(size: CGSize) -> some View {
@@ -453,9 +561,52 @@ struct NovelReaderView: View {
                     .padding(.trailing, 15)
                     .padding(.bottom, 14)
             }
-            bottomPanel
+            if model.isSpeechPrepared {
+                speechPanel
+            } else {
+                bottomPanel
+            }
         }
         .transition(.opacity)
+    }
+
+    // MARK: 朗读面板
+
+    private var speechPanel: some View {
+        SpeechPanel(
+            isPaused: speech.isPaused,
+            status: model.speechStatusText,
+            detail: sleepLabel ?? model.speechDetailText,
+            onPreviousChapter: {
+                model.jump(toChapter: model.chapterIndex - 1)
+                restartSpeechFromCurrentPage()
+            },
+            onPreviousPage: {
+                model.turnPage(by: -1)
+                restartSpeechFromCurrentPage()
+            },
+            onTogglePlay: {
+                if speech.isPaused { speech.resume() } else { speech.pause() }
+            },
+            onNextPage: {
+                model.turnPage(by: 1)
+                restartSpeechFromCurrentPage()
+            },
+            onNextChapter: {
+                model.jump(toChapter: model.chapterIndex + 1)
+                restartSpeechFromCurrentPage()
+            },
+            onCatalog: { sheet = .catalog },
+            onSettings: { sheet = .settings(.typography) },
+            onExit: { stopSpeech() },
+            onVoice: { sheet = .voice },
+            onTimer: { startSleepTimer(minutes: 30) }
+        )
+    }
+
+    private var sleepLabel: String? {
+        guard let sleepMinutes else { return nil }
+        return "定时 \(sleepMinutes) 分钟后停止"
     }
 
     private var topBar: some View {
@@ -506,12 +657,7 @@ struct NovelReaderView: View {
                     detail: "计划里是 3 / 5 / 10 秒自动翻页，条漫模式也会一起做。"
                 )
             }
-            sideButton("headphones", highlighted: true) {
-                pending = PendingFeature(
-                    title: "朗读就是下一步",
-                    detail: "M5 做：本地系统语音、逐句高亮跟随、点中间收面板、章末自动续读、锁屏可控。用系统音色，不联网、不上传正文。"
-                )
-            }
+            sideButton("headphones", highlighted: true) { startSpeech() }
         }
     }
 

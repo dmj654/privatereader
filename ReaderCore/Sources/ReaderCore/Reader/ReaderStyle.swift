@@ -35,7 +35,7 @@ public enum ReaderFontFamily: String, CaseIterable, Codable, Sendable {
 }
 
 /// 排版参数 → 富文本属性。用 CTFont 而非 UIFont，保持跨平台可测。
-public struct ReaderStyle: Equatable, Sendable {
+public struct ReaderStyle: Hashable, Sendable {
     public var fontSize: Double
     public var lineHeightMultiple: Double
     public var paragraphSpacing: Double

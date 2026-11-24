@@ -15,6 +15,21 @@ final class NovelReaderViewModel: ObservableObject {
     private var pendingPage: Int?
     private var lastLoggedChapter = -1
 
+    // 章节富文本缓存：正文与分页、朗读必须共用同一份字符串，偏移才对得上
+    private var cachedAttributed: NSAttributedString?
+    private var cachedKey: CacheKey?
+    private struct CacheKey: Equatable {
+        let chapter: Int
+        let style: ReaderStyle
+        let theme: String
+    }
+
+    // 朗读
+    @Published private(set) var speechIndex: Int?
+    private var speechQueue: SpeechQueue?
+    private var speechSentences: [SpeechSentence] = []
+    private var speechSentenceKey: CacheKey?
+
     @Published private(set) var chapters: [NovelChapter] = []
     @Published var chapterIndex: Int = 0
     @Published var pageIndex: Int = 0
@@ -111,8 +126,7 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     func repaginate() {
-        guard let chapter = currentChapter, lastPageSize.width > 40 else { return }
-        let attributed = attributedBody(for: chapter)
+        guard lastPageSize.width > 40, let attributed = chapterAttributed() else { return }
         pageRanges = Paginator.pageRanges(attributedString: attributed, pageSize: lastPageSize)
         pageIndex = min(pageIndex, max(pageRanges.count - 1, 0))
     }
@@ -150,14 +164,47 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     var currentPageText: NSAttributedString {
-        guard let chapter = currentChapter,
-              pageRanges.indices.contains(pageIndex) else {
+        guard pageRanges.indices.contains(pageIndex),
+              let attributed = chapterAttributed() else {
             return NSAttributedString(string: "")
         }
-        let attributed = attributedBody(for: chapter)
         let range = pageRanges[pageIndex]
         guard range.location + range.length <= attributed.length else { return attributed }
-        return attributed.attributedSubstring(from: range)
+
+        let page = NSMutableAttributedString(attributedString: attributed.attributedSubstring(from: range))
+        applySpeechHighlight(to: page, pageRange: range)
+        return page
+    }
+
+    /// 整章富文本只构建一次。分页、朗读切句、高亮都基于同一份字符串，
+    /// 否则句子的偏移和页的范围会错位，高亮就会漂。
+    private func chapterAttributed() -> NSAttributedString? {
+        guard let chapter = currentChapter else { return nil }
+        let key = CacheKey(chapter: chapterIndex, style: style, theme: theme.rawValue)
+        if key == cachedKey, let cached = cachedAttributed { return cached }
+
+        let built = attributedBody(for: chapter)
+        cachedAttributed = built
+        cachedKey = key
+        return built
+    }
+
+    private var speechHighlightColor: UIColor {
+        theme.isDark
+            ? UIColor(white: 1, alpha: 0.16)
+            : UIColor(red: 0.72, green: 0.36, blue: 0.24, alpha: 0.14)
+    }
+
+    private func applySpeechHighlight(to page: NSMutableAttributedString, pageRange: NSRange) {
+        guard let speechIndex, speechSentences.indices.contains(speechIndex) else { return }
+        let sentence = speechSentences[speechIndex]
+
+        let overlap = NSIntersectionRange(sentence.range, pageRange)
+        guard overlap.length > 0 else { return }
+
+        let local = NSRange(location: overlap.location - pageRange.location, length: overlap.length)
+        guard local.location >= 0, local.location + local.length <= page.length else { return }
+        page.addAttribute(.backgroundColor, value: speechHighlightColor, range: local)
     }
 
     // MARK: 翻页
@@ -288,5 +335,106 @@ final class NovelReaderViewModel: ObservableObject {
     func removeBookmark(_ bookmark: Bookmark) {
         try? bookmarkRepo.delete(id: bookmark.id)
         bookmarks = (try? bookmarkRepo.list(bookId: book.id)) ?? []
+    }
+
+    // MARK: 朗读
+
+    var isSpeechPrepared: Bool { speechQueue != nil }
+
+    /// 准备朗读：从当前页的第一句开始，返回要念的文本。
+    /// 不从头念——你已经看到哪，它就念哪。
+    func prepareSpeech(startAtCurrentPage: Bool = true) -> String? {
+        guard let attributed = chapterAttributed(), attributed.length > 0 else { return nil }
+        let key = CacheKey(chapter: chapterIndex, style: style, theme: theme.rawValue)
+
+        if speechSentenceKey != key || speechSentences.isEmpty {
+            speechSentences = SentenceSplitter.split(attributed.string)
+            speechSentenceKey = key
+        }
+        guard !speechSentences.isEmpty else { return nil }
+
+        var start = 0
+        if startAtCurrentPage, pageRanges.indices.contains(pageIndex) {
+            start = SpeechQueue(sentences: speechSentences)
+                .index(containing: pageRanges[pageIndex].location) ?? 0
+        }
+
+        speechQueue = SpeechQueue(sentences: speechSentences, index: start)
+        speechIndex = speechQueue?.index
+        syncPageToSpeech()
+        return speechQueue?.current?.text
+    }
+
+    /// 念下一句。返回 nil 表示本章念完了。
+    func advanceSpeechText() -> String? {
+        guard var queue = speechQueue else { return nil }
+        guard queue.advance() else { return nil }
+        speechQueue = queue
+        speechIndex = queue.index
+        syncPageToSpeech()
+        return queue.current?.text
+    }
+
+    /// 回到上一句。已经在第一句时重新念当前这句。
+    func rewindSpeechText() -> String? {
+        guard var queue = speechQueue else { return nil }
+        if queue.rewind() {
+            speechQueue = queue
+            speechIndex = queue.index
+            syncPageToSpeech()
+        }
+        return queue.current?.text
+    }
+
+    /// 本章念完，接着念下一章。返回下一章第一句的文本。
+    func beginNextChapterForSpeech() -> String? {
+        guard chapterIndex + 1 < chapters.count else { return nil }
+
+        chapterIndex += 1
+        pendingPage = nil
+        pageIndex = 0
+        cachedKey = nil
+        cachedAttributed = nil
+        speechSentenceKey = nil
+        speechSentences = []
+        repaginate()
+
+        persistProgress(force: true)
+        return prepareSpeech(startAtCurrentPage: true)
+    }
+
+    func endSpeech() {
+        speechQueue = nil
+        speechIndex = nil
+    }
+
+    /// 手动翻页后让朗读跟到当前页的第一句；不在朗读状态时返回 nil。
+    func realignSpeechToCurrentPage() -> String? {
+        guard speechQueue != nil else { return nil }
+        return prepareSpeech(startAtCurrentPage: true)
+    }
+
+    var speechStatusText: String {
+        guard let speechIndex, speechSentences.indices.contains(speechIndex) else {
+            return "朗读中"
+        }
+        return "朗读中 · 第 \(chapterIndex + 1) 章 第 \(speechIndex + 1)/\(speechSentences.count) 句"
+    }
+
+    var speechDetailText: String {
+        guard let speechIndex, speechSentences.indices.contains(speechIndex) else { return "" }
+        let remaining = max(speechSentences.count - speechIndex - 1, 0)
+        return "本章还剩 \(remaining) 句"
+    }
+
+    /// 让当前页跟上正在念的那一句。
+    private func syncPageToSpeech() {
+        guard let sentence = speechQueue?.current else { return }
+        guard let target = pageRanges.firstIndex(where: { NSLocationInRange(sentence.location, $0) }) else {
+            return
+        }
+        guard target != pageIndex else { return }
+        pageIndex = target
+        persistProgress(force: true)
     }
 }
