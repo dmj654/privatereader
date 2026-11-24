@@ -40,17 +40,35 @@ public enum RuleRunner {
             return jsonElements(resolved, json: html)
         }
 
-        // 列表规则只取选择器部分（不支持 `@text` 之类）
-        let head = resolved.components(separatedBy: "@").first ?? resolved
-        let (selector, index) = cssToken(head)
-
+        let tokens = resolved.components(separatedBy: "@")
+        guard let first = tokens.first, !first.isEmpty else { return [] }
         guard let doc = try? SwiftSoup.parse(html) else { return [] }
-        guard var matched = try? doc.select(selector).array(), !matched.isEmpty else { return [] }
 
-        if let index {
-            let resolvedIndex = index < 0 ? matched.count + index : index
+        // 列表规则常见 `class.book-list@tag.li`，要一路选下去
+        let (firstSelector, firstIndex) = cssToken(first)
+        guard var matched = try? doc.select(firstSelector).array(), !matched.isEmpty else { return [] }
+
+        if let firstIndex {
+            let resolvedIndex = firstIndex < 0 ? matched.count + firstIndex : firstIndex
             guard matched.indices.contains(resolvedIndex) else { return [] }
             matched = [matched[resolvedIndex]]
+        }
+
+        for token in tokens.dropFirst() {
+            guard !isAttributeToken(token) else { break }
+            let (selector, index) = cssToken(token)
+            var next: [Element] = []
+            for element in matched {
+                guard let found = try? element.select(selector).array() else { continue }
+                next.append(contentsOf: found)
+            }
+            if let index {
+                let resolvedIndex = index < 0 ? next.count + index : index
+                guard next.indices.contains(resolvedIndex) else { return [] }
+                next = [next[resolvedIndex]]
+            }
+            guard !next.isEmpty else { return [] }
+            matched = next
         }
 
         return matched.compactMap { try? $0.outerHtml() }
