@@ -15,6 +15,7 @@ final class AppEnvironment: ObservableObject {
     let sessions: SessionRepository
     let cache: CacheRepository
     let library: LibraryService
+    let chapterProvider: ChapterProvider
 
     @Published var startupMessage: String?
 
@@ -41,6 +42,7 @@ final class AppEnvironment: ObservableObject {
         self.sessions = SessionRepository(db: database.writer)
         self.cache = CacheRepository(db: database.writer)
         self.library = LibraryService(books: BookRepository(db: database.writer), paths: paths)
+        self.chapterProvider = ChapterProvider(paths: paths)
         self.startupMessage = message
     }
 }

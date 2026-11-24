@@ -8,6 +8,7 @@ struct DetailView: View {
 
     @State private var progress: ReadingProgress?
     @State private var showDeleteConfirm = false
+    @State private var showReader = false
 
     var body: some View {
         ZStack {
@@ -26,6 +27,10 @@ struct DetailView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task { progress = try? env.progress.fetch(bookId: book.id) }
+        .fullScreenCover(isPresented: $showReader) {
+            NovelReaderView(book: book, env: env)
+                .environmentObject(env)
+        }
         .confirmationDialog("删除这本书？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("只删记录，保留文件") { deleteBook(removeFiles: false) }
             Button("删除记录和文件", role: .destructive) { deleteBook(removeFiles: true) }
@@ -86,7 +91,7 @@ struct DetailView: View {
     private var actions: some View {
         HStack(spacing: 10) {
             Button {
-                // 阅读器在 M4 接入
+                showReader = true
             } label: {
                 Text(primaryTitle)
             }
