@@ -600,7 +600,7 @@ struct NovelReaderView: View {
             onSettings: { sheet = .settings(.typography) },
             onExit: { stopSpeech() },
             onVoice: { sheet = .voice },
-            onTimer: { startSleepTimer(minutes: 30) }
+            onTimer: { showingTimerMenu = true }
         )
     }
 
