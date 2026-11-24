@@ -20,7 +20,9 @@ final class SpeechEngine: NSObject, ObservableObject {
     var onRemoteNext: (() -> Void)?
     var onRemotePrevious: (() -> Void)?
 
-    private let synthesizer = AVSpeechSynthesizer()
+    /// 引擎可以整体换掉：AVSpeechSynthesizer 偶尔会进入"delegate 不再回调、也不出声"的状态，
+    /// 此时 stop / speak 都没用，只能丢掉重建。这是"听书卡住只能重启 App"的解法。
+    private var synthesizer = AVSpeechSynthesizer()
 
     /// 存储键。语速与音色是"这个人耳朵的习惯"，必须跨启动记住。
     private enum Key {
@@ -29,12 +31,16 @@ final class SpeechEngine: NSObject, ObservableObject {
     }
 
     /// 语速，0.4–0.7 之间比较适合中文。默认比系统默认稍慢一点。
-    /// didSet 直接落盘，滑块每动一格都记住。
-    @Published var rate: Float = SpeechEngine.storedRate() {
+    ///
+    /// 刻意**不加 @Published**：滑块每动一格都会发通知，
+    /// 阅读器整个 body 会跟着重算（重建当前页富文本），手感就是"调语速会卡"。
+    /// 滑块自己维护一份本地值，松手时写回这里。
+    var rate: Float = SpeechEngine.storedRate() {
         didSet { UserDefaults.standard.set(rate, forKey: Key.rate) }
     }
 
-    @Published var voiceIdentifier: String? = UserDefaults.standard.string(forKey: Key.voice) {
+    /// 音色同上：不需要让阅读页因为选音色而重绘。
+    var voiceIdentifier: String? = UserDefaults.standard.string(forKey: Key.voice) {
         didSet { UserDefaults.standard.set(voiceIdentifier, forKey: Key.voice) }
     }
 
@@ -44,11 +50,79 @@ final class SpeechEngine: NSObject, ObservableObject {
     /// 只靠 `isSpeaking` 判断，回调仍会去拿下一章然后重新开口——"退出到书架还在读"就是这么来的。
     private var isPlaybackRequested = false
 
+    // MARK: 卡死看门狗
+    //
+    // AVSpeechSynthesizer 有两个真实的坏状态：
+    // 1. speak 之后 delegate 完全不回调（被别的 App 抢了 audio session、系统音频服务重启）；
+    // 2. 念到一半不再出声，也不发 didFinish。
+    // 两种状态下 stop/speak 都无效，只能重建实例。没有看门狗就表现为
+    // "卡住不动，重启 App 才好"。
+
+    private var currentText: String?
+    private var startWatchdog: DispatchWorkItem?
+    private var finishWatchdog: DispatchWorkItem?
+    private var hasStartedCurrent = false
+    private var stallRecoveries = 0
+    private var wasInterrupted = false
+    /// 被我们主动打断的那一条。它的 didCancel 不该触发"重念"，否则会和新语音打架。
+    private var interruptingUtterance: AVSpeechUtterance?
+
+    // MARK: 静音保活
+    //
+    // 只用 AVSpeechSynthesizer 时，系统有时不把这段输出当成"媒体播放"，
+    // 锁屏就干脆不画正在播放卡片。同时循环播一段静音，让音频会话保持媒体活跃，
+    // 卡片才会稳定出现。静音不占音量、不产生可听声音。
+
+    private var silencePlayer: AVAudioPlayer?
+
+    private static let silentWAV: Data = {
+        let sampleRate: UInt32 = 8000
+        let seconds = 1
+        let dataSize = Int(sampleRate) * seconds * 2   // 16-bit mono
+        var data = Data()
+
+        func ascii(_ value: String) { data.append(contentsOf: value.utf8) }
+        func u32(_ value: UInt32) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+        }
+        func u16(_ value: UInt16) {
+            var little = value.littleEndian
+            withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
+        }
+
+        ascii("RIFF"); u32(UInt32(36 + dataSize)); ascii("WAVE")
+        ascii("fmt "); u32(16); u16(1); u16(1)
+        u32(sampleRate); u32(sampleRate * 2); u16(2); u16(16)
+        ascii("data"); u32(UInt32(dataSize))
+        data.append(Data(repeating: 0, count: dataSize))
+        return data
+    }()
+
+    private func startSilentKeeper() {
+        if let player = silencePlayer {
+            if !player.isPlaying { player.play() }
+            return
+        }
+        guard let player = try? AVAudioPlayer(data: Self.silentWAV) else { return }
+        player.numberOfLoops = -1
+        player.volume = 0
+        player.prepareToPlay()
+        player.play()
+        silencePlayer = player
+    }
+
+    private func stopSilentKeeper() {
+        silencePlayer?.stop()
+        silencePlayer = nil
+    }
+
     override init() {
         super.init()
         synthesizer.delegate = self
         configureAudioSession()
         configureRemoteCommands()
+        observeAudioSession()
     }
 
     private static func storedRate() -> Float {
@@ -73,6 +147,7 @@ final class SpeechEngine: NSObject, ObservableObject {
         guard !trimmed.isEmpty else { return }
 
         isPlaybackRequested = true
+        currentText = trimmed
         speechGeneration += 1
         let generation = speechGeneration
 
@@ -90,6 +165,7 @@ final class SpeechEngine: NSObject, ObservableObject {
         let start = { [weak self] in
             guard let self, self.speechGeneration == generation else { return }
             self.activateAudioSession()
+            self.startSilentKeeper()
             self.currentUtterance = utterance
             self.synthesizer.speak(utterance)
             self.isSpeaking = true
@@ -97,7 +173,10 @@ final class SpeechEngine: NSObject, ObservableObject {
             self.updateNowPlaying()
         }
 
+        armWatchdogs(for: trimmed, generation: generation)
+
         if synthesizer.isSpeaking || synthesizer.isPaused {
+            interruptingUtterance = currentUtterance
             synthesizer.stopSpeaking(at: .immediate)
             DispatchQueue.main.async(execute: start)
         } else {
@@ -105,10 +184,127 @@ final class SpeechEngine: NSObject, ObservableObject {
         }
     }
 
+    // MARK: 卡死恢复
+
+    private func armWatchdogs(for text: String, generation: Int) {
+        startWatchdog?.cancel()
+        hasStartedCurrent = false
+
+        // 启动看门狗：3 秒还不开口，就是引擎坏了
+        let startItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.speechGeneration == generation,
+                  self.isPlaybackRequested,
+                  !self.hasStartedCurrent else { return }
+            self.recoverFromStall()
+        }
+        startWatchdog = startItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: startItem)
+
+        armFinishWatchdog(for: text, generation: generation)
+    }
+
+    /// 只负责"念太久还没念完"。暂停恢复时也用它重新计时。
+    private func armFinishWatchdog(for text: String, generation: Int) {
+        finishWatchdog?.cancel()
+
+        // 中文按每秒 4 字估，留 1.8 倍余量
+        let expected = min(max(Double(text.count) / 4.0, 5), 90)
+        let finishItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.speechGeneration == generation,
+                  self.isPlaybackRequested,
+                  self.isSpeaking,
+                  !self.isPaused else { return }
+            self.recoverFromStall()
+        }
+        finishWatchdog = finishItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + expected * 1.8 + 8, execute: finishItem)
+    }
+
+    private func recoverFromStall() {
+        guard isPlaybackRequested else { return }
+        stallRecoveries += 1
+
+        let text = currentText
+        rebuildSynthesizer()
+        isSpeaking = false
+        isPaused = false
+
+        guard stallRecoveries <= 3, let text else {
+            // 重建三次仍不行就停手，别无限重试把电耗光
+            isPlaybackRequested = false
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            MPNowPlayingInfoCenter.default().playbackState = .stopped
+            return
+        }
+        speak(text)
+    }
+
+    private func rebuildSynthesizer() {
+        startWatchdog?.cancel()
+        finishWatchdog?.cancel()
+        interruptingUtterance = nil
+        stopSilentKeeper()
+        synthesizer.stopSpeaking(at: .immediate)
+        synthesizer.delegate = nil
+        synthesizer = AVSpeechSynthesizer()
+        synthesizer.delegate = self
+    }
+
+    // MARK: 音频中断
+
+    private func observeAudioSession() {
+        let center = NotificationCenter.default
+        center.addObserver(self,
+                           selector: #selector(handleInterruption(_:)),
+                           name: AVAudioSession.interruptionNotification,
+                           object: nil)
+        center.addObserver(self,
+                           selector: #selector(handleMediaServicesReset),
+                           name: AVAudioSession.mediaServicesWereResetNotification,
+                           object: nil)
+    }
+
+    @objc private func handleInterruption(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+
+        switch type {
+        case .began:
+            // 系统已接管音频；这里只做标记，主动 stop 反而更难恢复
+            wasInterrupted = true
+        case .ended:
+            guard wasInterrupted else { return }
+            wasInterrupted = false
+            guard isPlaybackRequested else { return }
+
+            activateAudioSession()
+            startSilentKeeper()
+            if !synthesizer.isSpeaking, let text = currentText {
+                // 被来电等打断后合成器已经没了当前这句，重念它
+                speak(text)
+            } else if isPaused {
+                synthesizer.continueSpeaking()
+            }
+        @unknown default:
+            break
+        }
+    }
+
+    @objc private func handleMediaServicesReset() {
+        guard isPlaybackRequested else { return }
+        rebuildSynthesizer()
+        if let text = currentText { speak(text) }
+    }
+
     func pause() {
         guard synthesizer.isSpeaking, !synthesizer.isPaused else { return }
         synthesizer.pauseSpeaking(at: .word)
         isPaused = true
+        // 暂停期间没有 didFinish，看门狗必须停掉，否则会被当成"卡死"重念
+        startWatchdog?.cancel()
+        finishWatchdog?.cancel()
         updateNowPlaying()
     }
 
@@ -116,6 +312,10 @@ final class SpeechEngine: NSObject, ObservableObject {
         guard synthesizer.isPaused else { return }
         synthesizer.continueSpeaking()
         isPaused = false
+        // 恢复后重新计一次（按整句估算，只会多给时间，不会误判）
+        if let text = currentText {
+            armFinishWatchdog(for: text, generation: speechGeneration)
+        }
         updateNowPlaying()
     }
 
@@ -125,6 +325,15 @@ final class SpeechEngine: NSObject, ObservableObject {
         isPlaybackRequested = false
         // 让已经排队、但还没执行的新语音请求作废。
         speechGeneration += 1
+        startWatchdog?.cancel()
+        finishWatchdog?.cancel()
+        startWatchdog = nil
+        finishWatchdog = nil
+        hasStartedCurrent = false
+        stallRecoveries = 0
+        currentText = nil
+        interruptingUtterance = nil
+        stopSilentKeeper()
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
         isPaused = false
@@ -146,28 +355,39 @@ final class SpeechEngine: NSObject, ObservableObject {
         }
     }
 
-    static func defaultChineseVoice() -> AVSpeechSynthesisVoice? {
+    /// 缓存一次。`speechVoices()` 在 iOS 上要枚举系统语音，每句都调会拖慢开口。
+    private static let cachedDefaultVoice: AVSpeechSynthesisVoice? = {
         let voices = chineseVoices()
         return voices.first { $0.language == "zh-CN" } ?? voices.first
+    }()
+
+    static func defaultChineseVoice() -> AVSpeechSynthesisVoice? {
+        cachedDefaultVoice
     }
 
     // MARK: 音频会话与锁屏
 
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        // 不带 duckOthers：听书时应该独占播放，也让系统更明确地把它当成媒体播放。
+        try? session.setCategory(.playback, mode: .spokenAudio, options: [])
         // 锁屏 / 控制中心的「正在播放」卡片要能收到远程控制事件，必须显式开始接收。
         UIApplication.shared.beginReceivingRemoteControlEvents()
     }
 
     private func activateAudioSession() {
-        try? AVAudioSession.sharedInstance().setActive(true)
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            // 激活失败通常是被别的 App 占着；下一次 speak 还会再试
+        }
     }
 
-    /// 锁屏与控制中心上的信息。没有它，锁屏只显示"正在播放"和一个空白卡片。
+    /// 锁屏与控制中心上的信息。
     ///
-    /// 只设 nowPlayingInfo 不够：iOS 16 还要设 playbackState，
-    /// 否则系统不认为这个 App 正在播东西，锁屏干脆不显示卡片。
+    /// 用最小字段集：title / artist / album / 播放速率。
+    /// 之前塞了 IsLiveStream 和 MediaType，反而可能让系统判断成"非媒体"，锁屏不画卡片。
+    /// iOS 16 还要求 playbackState，否则系统不认这个 App 正在播。
     private func updateNowPlaying() {
         let center = MPNowPlayingInfoCenter.default()
 
@@ -182,9 +402,7 @@ final class SpeechEngine: NSObject, ObservableObject {
             MPMediaItemPropertyArtist: nowPlayingSubtitle,
             MPMediaItemPropertyAlbumTitle: "私阅读",
             MPNowPlayingInfoPropertyPlaybackRate: isPaused ? 0.0 : 1.0,
-            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
-            MPNowPlayingInfoPropertyIsLiveStream: true,
-            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0
         ]
         if let artwork = nowPlayingArtwork {
             info[MPMediaItemPropertyArtwork] = artwork
@@ -200,6 +418,12 @@ final class SpeechEngine: NSObject, ObservableObject {
     func updateMetadata(title: String, subtitle: String) {
         nowPlayingTitle = title
         nowPlayingSubtitle = subtitle
+        updateNowPlaying()
+    }
+
+    /// 切后台 / 锁屏前再刷一次。有的系统版本会在 App 进入后台时丢掉 Now Playing 信息，
+    /// 出一次声音就让系统重新认领这张卡片。
+    func refreshNowPlaying() {
         updateNowPlaying()
     }
 
@@ -252,8 +476,12 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
             guard utterance === self.currentUtterance else { return }
+            self.startWatchdog?.cancel()
+            self.hasStartedCurrent = true
+            self.stallRecoveries = 0
             self.isSpeaking = true
             self.isPaused = false
+            self.updateNowPlaying()
         }
     }
 
@@ -262,6 +490,8 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
             // 旧 utterance 的完成通知晚到了：它既不该改状态，也不该推进队列，
             // 否则会把用户刚翻到的那一页的第一句直接跳过去。
             guard utterance === self.currentUtterance else { return }
+            self.startWatchdog?.cancel()
+            self.finishWatchdog?.cancel()
             self.isSpeaking = false
             // 已经 stop 过就不要再接下一句。退出阅读器时最怕这个：
             // 用户已经回到书架，声音却从下一章重新冒出来。
@@ -272,9 +502,22 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
+            // 我们主动打断换句：这条 cancel 是预期的，不要重念
+            if utterance === self.interruptingUtterance {
+                self.interruptingUtterance = nil
+                return
+            }
             guard utterance === self.currentUtterance else { return }
             self.isSpeaking = false
             self.isPaused = false
+            self.startWatchdog?.cancel()
+            self.finishWatchdog?.cancel()
+
+            // 系统自己取消了这句（音频服务异常、被别的 App 抢走），
+            // 不发 didFinish 也不出声，队列会永远停在这里——只能重念当前句。
+            guard self.isPlaybackRequested, !self.wasInterrupted, !self.isPaused else { return }
+            guard let text = self.currentText else { return }
+            self.speak(text)
         }
     }
 }

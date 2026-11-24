@@ -106,13 +106,17 @@ struct SpeechPanel: View {
 }
 
 /// 人声与语速。
+///
+/// 语速和音色都先放在本地 @State 里：
+/// 直接绑到 engine 上会让阅读器整个 body 重算，拖动滑块就像卡住一样。
+/// 系统语音列表也只在 onAppear 取一次——枚举语音在 iOS 上并不便宜。
 struct VoiceSheet: View {
     @ObservedObject var engine: SpeechEngine
     @Environment(\.dismiss) private var dismiss
 
-    private var voices: [AVSpeechSynthesisVoice] {
-        SpeechEngine.chineseVoices()
-    }
+    @State private var rate: Float = 0
+    @State private var selectedVoiceID: String?
+    @State private var voices: [AVSpeechSynthesisVoice] = []
 
     var body: some View {
         NavigationStack {
@@ -131,8 +135,15 @@ struct VoiceSheet: View {
                                     .font(.system(size: 12))
                                     .foregroundStyle(Palette.ink3)
                             }
-                            Slider(value: $engine.rate, in: 0.35...0.65, step: 0.01)
-                                .tint(Palette.accent)
+                            Slider(value: $rate,
+                                   in: 0.35...0.65,
+                                   step: 0.01,
+                                   onEditingChanged: { editing in
+                                       // 拖动过程只改本地值；松手才写回引擎，
+                                       // 避免每一格都落一次 UserDefaults。
+                                       if !editing { engine.rate = rate }
+                                   })
+                            .tint(Palette.accent)
                         }
                         .padding(14)
                         .background(Palette.surface)
@@ -154,6 +165,7 @@ struct VoiceSheet: View {
                             VStack(spacing: 0) {
                                 ForEach(voices, id: \.identifier) { voice in
                                     Button {
+                                        selectedVoiceID = voice.identifier
                                         engine.voiceIdentifier = voice.identifier
                                     } label: {
                                         HStack(spacing: 10) {
@@ -206,14 +218,20 @@ struct VoiceSheet: View {
                 }
             }
         }
+        .onAppear {
+            rate = engine.rate
+            selectedVoiceID = engine.voiceIdentifier
+            // 只取一次：拖动语速时不该反复枚举系统语音
+            voices = SpeechEngine.chineseVoices()
+        }
     }
 
     private var rateLabel: String {
-        String(format: "%.2f×", Double(engine.rate) / Double(AVSpeechUtteranceDefaultSpeechRate))
+        String(format: "%.2f×", Double(rate) / Double(AVSpeechUtteranceDefaultSpeechRate))
     }
 
     private func isSelected(_ voice: AVSpeechSynthesisVoice) -> Bool {
-        if let id = engine.voiceIdentifier { return id == voice.identifier }
+        if let id = selectedVoiceID { return id == voice.identifier }
         return voice.identifier == SpeechEngine.defaultChineseVoice()?.identifier
     }
 

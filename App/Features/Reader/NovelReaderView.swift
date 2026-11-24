@@ -117,7 +117,11 @@ struct NovelReaderView: View {
         }
         // 切后台也落一次盘：用户常常按 Home 键离开，而不是点返回。
         .onChange(of: scenePhase) { phase in
-            if phase != .active { model.persistProgress(force: true) }
+            if phase != .active {
+                model.persistProgress(force: true)
+                // 进后台/锁屏前把正在播放的信息再写一遍，避免系统丢掉锁屏卡片
+                speech.refreshNowPlaying()
+            }
         }
         .onDisappear {
             stopSpeech()
@@ -256,36 +260,30 @@ struct NovelReaderView: View {
         .frame(height: 22)
     }
 
-    /// 底部一行：电量 + 页码。和正文之间有一条极淡的分隔线，
-    /// 不然最后一行正文会直接顶到数字上，看着像排版出了错。
+    /// 底部一行：电量 + 页码。不画分隔线——阅读页要干净，
+    /// 数字本身的位置已经足够把信息区和正文分开。
     private var footerRow: some View {
-        VStack(spacing: 0) {
-            Rectangle()
-                .fill(model.theme.textColor.opacity(0.07))
-                .frame(height: 0.5)
-
-            HStack(spacing: 0) {
-                HStack(spacing: 3) {
-                    Image(systemName: battery.symbolName)
-                        .font(.system(size: 9))
-                    Text(battery.percentText)
-                        .font(.system(size: 9.5))
-                        .monospacedDigit()
-                }
-                .foregroundStyle(battery.isLow
-                                 ? Color(hex: 0xC65B4E)
-                                 : model.theme.textColor.opacity(0.4))
-
-                Spacer(minLength: 8)
-
-                Text("\(model.displayPage)/\(model.pageCount)")
+        HStack(spacing: 0) {
+            HStack(spacing: 3) {
+                Image(systemName: battery.symbolName)
+                    .font(.system(size: 9))
+                Text(battery.percentText)
                     .font(.system(size: 9.5))
                     .monospacedDigit()
-                    .foregroundStyle(model.theme.textColor.opacity(0.4))
             }
-            .padding(.horizontal, model.style.marginHorizontal)
-            .frame(height: 25)
+            .foregroundStyle(battery.isLow
+                             ? Color(hex: 0xC65B4E)
+                             : model.theme.textColor.opacity(0.4))
+
+            Spacer(minLength: 8)
+
+            Text("\(model.displayPage)/\(model.pageCount)")
+                .font(.system(size: 9.5))
+                .monospacedDigit()
+                .foregroundStyle(model.theme.textColor.opacity(0.4))
         }
+        .padding(.horizontal, model.style.marginHorizontal)
+        .frame(height: 25)
     }
 
     private func pageLayer(_ text: NSAttributedString) -> some View {
