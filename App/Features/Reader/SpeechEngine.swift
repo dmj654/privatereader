@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import MediaPlayer
+import UIKit
 
 /// 系统语音朗读的封装。
 ///
@@ -59,17 +60,21 @@ final class SpeechEngine: NSObject, ObservableObject {
 
     // MARK: 播放控制
 
+    /// 每次开口都递增。用来让"被打断的旧请求"失效：
+    /// stopSpeaking 是异步的，紧跟着同步 speak 有概率被系统吞掉，
+    /// 所以打断后的新语音放到下一个 runloop，并且先核对代次。
+    private var speechGeneration = 0
+    /// 当前真正在念的那一条。打断后旧 utterance 的回调还会陆续回来，
+    /// 不比对的话会把"新的一句"当成念完，白白跳过一句。
+    private var currentUtterance: AVSpeechUtterance?
+
     func speak(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
         isPlaybackRequested = true
-
-        if synthesizer.isSpeaking {
-            synthesizer.stopSpeaking(at: .immediate)
-        }
-
-        activateAudioSession()
+        speechGeneration += 1
+        let generation = speechGeneration
 
         let utterance = AVSpeechUtterance(string: trimmed)
         utterance.rate = rate
@@ -82,10 +87,22 @@ final class SpeechEngine: NSObject, ObservableObject {
             utterance.voice = Self.defaultChineseVoice()
         }
 
-        synthesizer.speak(utterance)
-        isSpeaking = true
-        isPaused = false
-        updateNowPlaying()
+        let start = { [weak self] in
+            guard let self, self.speechGeneration == generation else { return }
+            self.activateAudioSession()
+            self.currentUtterance = utterance
+            self.synthesizer.speak(utterance)
+            self.isSpeaking = true
+            self.isPaused = false
+            self.updateNowPlaying()
+        }
+
+        if synthesizer.isSpeaking || synthesizer.isPaused {
+            synthesizer.stopSpeaking(at: .immediate)
+            DispatchQueue.main.async(execute: start)
+        } else {
+            start()
+        }
     }
 
     func pause() {
@@ -106,10 +123,13 @@ final class SpeechEngine: NSObject, ObservableObject {
         // 先关掉"应该继续读"的开关，再停声音。顺序反了的话，
         // 排队中的 didFinish 会看到开关还开着，接着去念下一章。
         isPlaybackRequested = false
+        // 让已经排队、但还没执行的新语音请求作废。
+        speechGeneration += 1
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
         isPaused = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
     }
 
     // MARK: 音色
@@ -136,6 +156,8 @@ final class SpeechEngine: NSObject, ObservableObject {
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        // 锁屏 / 控制中心的「正在播放」卡片要能收到远程控制事件，必须显式开始接收。
+        UIApplication.shared.beginReceivingRemoteControlEvents()
     }
 
     private func activateAudioSession() {
@@ -143,21 +165,32 @@ final class SpeechEngine: NSObject, ObservableObject {
     }
 
     /// 锁屏与控制中心上的信息。没有它，锁屏只显示"正在播放"和一个空白卡片。
+    ///
+    /// 只设 nowPlayingInfo 不够：iOS 16 还要设 playbackState，
+    /// 否则系统不认为这个 App 正在播东西，锁屏干脆不显示卡片。
     private func updateNowPlaying() {
+        let center = MPNowPlayingInfoCenter.default()
+
         guard isSpeaking else {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            center.nowPlayingInfo = nil
+            center.playbackState = .stopped
             return
         }
+
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: nowPlayingTitle,
             MPMediaItemPropertyArtist: nowPlayingSubtitle,
+            MPMediaItemPropertyAlbumTitle: "私阅读",
             MPNowPlayingInfoPropertyPlaybackRate: isPaused ? 0.0 : 1.0,
-            MPNowPlayingInfoPropertyIsLiveStream: true
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+            MPNowPlayingInfoPropertyIsLiveStream: true,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue
         ]
         if let artwork = nowPlayingArtwork {
             info[MPMediaItemPropertyArtwork] = artwork
         }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        center.nowPlayingInfo = info
+        center.playbackState = isPaused ? .paused : .playing
     }
 
     private var nowPlayingTitle: String = "私阅读"
@@ -167,6 +200,16 @@ final class SpeechEngine: NSObject, ObservableObject {
     func updateMetadata(title: String, subtitle: String) {
         nowPlayingTitle = title
         nowPlayingSubtitle = subtitle
+        updateNowPlaying()
+    }
+
+    /// 锁屏封面。没有封面时锁屏只有一行书名，有封面才像"正在播放"。
+    func setArtwork(_ image: UIImage?) {
+        if let image {
+            nowPlayingArtwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        } else {
+            nowPlayingArtwork = nil
+        }
         updateNowPlaying()
     }
 
@@ -208,6 +251,7 @@ final class SpeechEngine: NSObject, ObservableObject {
 extension SpeechEngine: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
+            guard utterance === self.currentUtterance else { return }
             self.isSpeaking = true
             self.isPaused = false
         }
@@ -215,6 +259,9 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
+            // 旧 utterance 的完成通知晚到了：它既不该改状态，也不该推进队列，
+            // 否则会把用户刚翻到的那一页的第一句直接跳过去。
+            guard utterance === self.currentUtterance else { return }
             self.isSpeaking = false
             // 已经 stop 过就不要再接下一句。退出阅读器时最怕这个：
             // 用户已经回到书架，声音却从下一章重新冒出来。
@@ -225,6 +272,7 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
+            guard utterance === self.currentUtterance else { return }
             self.isSpeaking = false
             self.isPaused = false
         }

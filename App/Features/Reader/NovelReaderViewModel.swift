@@ -400,7 +400,9 @@ final class NovelReaderViewModel: ObservableObject {
 
         speechQueue = SpeechQueue(sentences: speechSentences, index: start)
         speechIndex = speechQueue?.index
-        syncPageToSpeech()
+        // 这里**不要**再 syncPageToSpeech：起点本来就取自当前页，
+        // 同步只会在句子跨页时把刚翻过去的那一页又拉回上一页。
+        // 自动往下念时的翻页由 advanceSpeechText 内部的 sync 负责。
         return speechQueue?.current?.text
     }
 
@@ -470,8 +472,17 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     /// 让当前页跟上正在念的那一句。
+    ///
+    /// 先看当前页和这一句有没有交集：有一半在这页上就别翻。
+    /// 以前只看句首位置，一句话跨页时会从下一页翻回上一页，用户看到的就是"页面自己往回跳"。
     private func syncPageToSpeech() {
         guard let sentence = speechQueue?.current else { return }
+
+        if pageRanges.indices.contains(pageIndex) {
+            let overlap = NSIntersectionRange(sentence.range, pageRanges[pageIndex])
+            if overlap.length > 0 { return }
+        }
+
         guard let target = pageRanges.firstIndex(where: { NSLocationInRange(sentence.location, $0) }) else {
             return
         }

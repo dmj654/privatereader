@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import ReaderCore
 
 /// 还没实现的入口，点了要给一句人话，不能静默。
@@ -24,6 +25,14 @@ private enum ReaderSheet: Identifiable {
     }
 }
 
+/// 阅读 / 听书是两种模式，不是同一页上叠个面板。
+/// 听书时点屏幕控制的是"念到哪一句"，阅读时控制的是"翻到哪一页"，
+/// 所以菜单、九宫格、点中间的反馈都分开。
+private enum ReaderMode: Equatable {
+    case reading
+    case listening
+}
+
 struct NovelReaderView: View {
     @StateObject private var model: NovelReaderViewModel
     @StateObject private var prefs = ReaderPreferences()
@@ -46,7 +55,12 @@ struct NovelReaderView: View {
     @State private var sleepWorkItem: DispatchWorkItem?
     @State private var showingTimerMenu = false
 
-    /// 右边缘右滑退出：整页跟手位移，松手过了阈值就关掉阅读器。
+    /// 当前是阅读还是听书。听书有自己的一套菜单和九宫格。
+    @State private var mode: ReaderMode = .reading
+    /// 正在编辑哪一套九宫格。
+    @State private var zoneTarget: ZoneScheme = .reading
+
+    /// 左边缘右滑退出：整页跟手位移，松手过了阈值就关掉阅读器。
     @State private var exitOffset: CGFloat = 0
     @State private var isEdgeExit = false
 
@@ -76,13 +90,20 @@ struct NovelReaderView: View {
                 }
 
                 if model.isMenuVisible && !editingZones {
-                    menuLayer(size: proxy.size)
+                    if mode == .listening {
+                        listeningLayer
+                    } else {
+                        menuLayer(size: proxy.size)
+                    }
                 }
 
                 if editingZones {
                     zoneEditor
                 }
             }
+            // 退出时整页（包括菜单）一起走，才有"被推回去"的实感
+            .offset(x: exitOffset)
+            .simultaneousGesture(edgeExitGesture)
             .statusBarHidden(model.isMenuVisible == false && !editingZones)
             .onAppear { viewWidth = proxy.size.width }
             .onChange(of: proxy.size) { viewWidth = $0.width }
@@ -141,6 +162,14 @@ struct NovelReaderView: View {
                     onChange: { model.repaginate() },
                     onEditZones: {
                         sheet = nil
+                        zoneTarget = .reading
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            withAnimation(.easeInOut(duration: 0.2)) { editingZones = true }
+                        }
+                    },
+                    onEditSpeechZones: {
+                        sheet = nil
+                        zoneTarget = .speech
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                             withAnimation(.easeInOut(duration: 0.2)) { editingZones = true }
                         }
@@ -180,8 +209,9 @@ struct NovelReaderView: View {
 
     private func pageArea(size: CGSize) -> some View {
         VStack(spacing: 0) {
+            headerRow
+
             ZStack {
-                // 只有正文参与翻页位移；信息栏在下面固定着，翻页时一动不动。
                 ZStack {
                     // 正在读的这一页
                     pageLayer(model.currentPageText)
@@ -194,15 +224,67 @@ struct NovelReaderView: View {
                     }
                 }
                 .opacity(contentOpacity)
-                .offset(x: exitOffset)
 
-                // 点击区固定在屏幕上，不跟着退出动画走
+                // 点击区固定在屏幕上
                 tapGrid
             }
             .simultaneousGesture(swipeGesture)
             .onChange(of: model.style) { _ in model.repaginate() }
 
-            infoBar
+            footerRow
+        }
+    }
+
+    /// 顶部一行：左边章节名，右边全书第几章。不遮正文，正文从这一行下面开始排。
+    private var headerRow: some View {
+        HStack(spacing: 8) {
+            Text(model.chapterTitle)
+                .font(.system(size: 10))
+                .foregroundStyle(model.theme.textColor.opacity(0.5))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 8)
+
+            Text("第\(model.chapterIndex + 1)/\(max(model.chapters.count, 1))章")
+                .font(.system(size: 10))
+                .monospacedDigit()
+                .foregroundStyle(model.theme.textColor.opacity(0.4))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, model.style.marginHorizontal)
+        .frame(height: 22)
+    }
+
+    /// 底部一行：电量 + 页码。和正文之间有一条极淡的分隔线，
+    /// 不然最后一行正文会直接顶到数字上，看着像排版出了错。
+    private var footerRow: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(model.theme.textColor.opacity(0.07))
+                .frame(height: 0.5)
+
+            HStack(spacing: 0) {
+                HStack(spacing: 3) {
+                    Image(systemName: battery.symbolName)
+                        .font(.system(size: 9))
+                    Text(battery.percentText)
+                        .font(.system(size: 9.5))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(battery.isLow
+                                 ? Color(hex: 0xC65B4E)
+                                 : model.theme.textColor.opacity(0.4))
+
+                Spacer(minLength: 8)
+
+                Text("\(model.displayPage)/\(model.pageCount)")
+                    .font(.system(size: 9.5))
+                    .monospacedDigit()
+                    .foregroundStyle(model.theme.textColor.opacity(0.4))
+            }
+            .padding(.horizontal, model.style.marginHorizontal)
+            .frame(height: 25)
         }
     }
 
@@ -219,48 +301,6 @@ struct NovelReaderView: View {
                 model.repaginateIfNeeded(size: pageInnerSize(newValue))
             }
         }
-    }
-
-    /// 固定在底部的信息栏：左上是书名，书名下面是电量，中间章号，右侧页码。
-    /// 三个位置宽度都写死，翻页只换数字，不会因为「第 9 页」变「第 10 页」就整排挪一下。
-    private var infoBar: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(model.book.title)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(model.theme.textColor.opacity(0.58))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                HStack(spacing: 3) {
-                    Image(systemName: battery.symbolName)
-                        .font(.system(size: 9))
-                    Text(battery.percentText)
-                        .font(.system(size: 9.5))
-                        .monospacedDigit()
-                }
-                .foregroundStyle(battery.isLow
-                                 ? Color(hex: 0xC65B4E)
-                                 : model.theme.textColor.opacity(0.42))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text("第 \(model.chapterIndex + 1) 章")
-                .font(.system(size: 10))
-                .foregroundStyle(model.theme.textColor.opacity(0.42))
-                .lineLimit(1)
-                .frame(width: 78)
-
-            Text("\(model.displayPage) / \(model.pageCount)")
-                .font(.system(size: 10))
-                .monospacedDigit()
-                .foregroundStyle(model.theme.textColor.opacity(0.42))
-                .frame(width: 58, alignment: .trailing)
-        }
-        .padding(.horizontal, model.style.marginHorizontal)
-        .padding(.top, 2)
-        .padding(.bottom, 5)
-        .frame(height: 32)
     }
 
     private func pageInnerSize(_ size: CGSize) -> CGSize {
@@ -286,7 +326,12 @@ struct NovelReaderView: View {
         Rectangle()
             .fill(Color.clear)
             .contentShape(Rectangle())
-            .onTapGesture { perform(prefs.zones[zone]) }
+            .onTapGesture { perform(activeZones[zone]) }
+    }
+
+    /// 听书用自己的九宫格：同样是九个格子，但动作是"上一句 / 下一句 / 暂停"这一套。
+    private var activeZones: TapZoneConfig {
+        mode == .listening ? prefs.speechZones : prefs.zones
     }
 
     private func perform(_ action: TapAction) {
@@ -299,8 +344,16 @@ struct NovelReaderView: View {
             withAnimation(.easeInOut(duration: 0.18)) { model.isMenuVisible.toggle() }
         case .previousChapter:
             model.jump(toChapter: model.chapterIndex - 1)
+            if mode == .listening { restartSpeechFromCurrentPage() }
         case .nextChapter:
             model.jump(toChapter: model.chapterIndex + 1)
+            if mode == .listening { restartSpeechFromCurrentPage() }
+        case .previousSentence:
+            speakPreviousSentence()
+        case .nextSentence:
+            speakNextSentence()
+        case .toggleSpeechPlayback:
+            toggleSpeechPlayback()
         case .none:
             break
         }
@@ -368,18 +421,12 @@ struct NovelReaderView: View {
     }
 
     /// 跟手滑动：拖动时两页一起走，松手按位移决定落地还是弹回。
-    /// 右边缘往里滑交给退出：这是手机上一个很顺手的动作，翻页手势不该把它吃掉。
+    /// 左边缘右滑留给退出（和 iOS 返回手势一致），这里不再接管。
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
                 guard !model.isMenuVisible, !editingZones else { return }
-
-                // 先判退出，再判翻页。否则默认「平移」模式下边缘右滑会被当成上一页。
-                if isEdgeExit || startsAtRightEdge(value) {
-                    isEdgeExit = true
-                    exitOffset = max(0, min(value.translation.width, max(viewWidth, 1)))
-                    return
-                }
+                guard !startsAtLeftEdge(value) else { return }
 
                 guard prefs.pageTurn == .follow || prefs.pageTurn == .slide else { return }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
@@ -400,11 +447,6 @@ struct NovelReaderView: View {
                 }
             }
             .onEnded { value in
-                if isEdgeExit {
-                    finishEdgeExit(value)
-                    return
-                }
-
                 guard !model.isMenuVisible, !editingZones else {
                     snapBack()
                     return
@@ -452,9 +494,24 @@ struct NovelReaderView: View {
             }
     }
 
-    /// 起点在屏幕最右侧 28pt 内、向右拖，才算退出。
-    private func startsAtRightEdge(_ value: DragGesture.Value) -> Bool {
-        value.startLocation.x > viewWidth - 28
+    /// 左边缘右滑退出。菜单打开时同样有效——用户不该为了退出还得先收面板。
+    private var edgeExitGesture: some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                guard !editingZones else { return }
+                guard isEdgeExit || startsAtLeftEdge(value) else { return }
+                isEdgeExit = true
+                exitOffset = max(0, min(value.translation.width, max(viewWidth, 1)))
+            }
+            .onEnded { value in
+                guard isEdgeExit else { return }
+                finishEdgeExit(value)
+            }
+    }
+
+    /// 起点在屏幕最左侧 30pt 内、向右拖。
+    private func startsAtLeftEdge(_ value: DragGesture.Value) -> Bool {
+        value.startLocation.x < 30
             && value.translation.width > 6
             && abs(value.translation.width) > abs(value.translation.height)
     }
@@ -494,10 +551,12 @@ struct NovelReaderView: View {
             VStack(spacing: 0) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("屏幕区域功能")
+                        Text(zoneTarget == .speech ? "听书区域功能" : "阅读区域功能")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(.white)
-                        Text("点一个区域，选它做什么")
+                        Text(zoneTarget == .speech
+                             ? "听书时点这些格子做什么"
+                             : "阅读时点这些格子做什么")
                             .font(.system(size: 11.5))
                             .foregroundStyle(.white.opacity(0.65))
                     }
@@ -541,11 +600,12 @@ struct NovelReaderView: View {
 
     private func zoneCell(_ zone: TapZone) -> some View {
         Menu {
-            ForEach(TapAction.allCases) { action in
+            // 阅读区域不出现「朗读下一句」这类只在听书有意义的动作
+            ForEach(availableActions) { action in
                 Button {
-                    prefs.zones[zone] = action
+                    setZoneAction(action, for: zone)
                 } label: {
-                    if prefs.zones[zone] == action {
+                    if zoneAction(zone) == action {
                         Label(action.title, systemImage: "checkmark")
                     } else {
                         Text(action.title)
@@ -557,9 +617,9 @@ struct NovelReaderView: View {
                 Text(zone.title)
                     .font(.system(size: 11))
                     .foregroundStyle(.white.opacity(0.6))
-                Text(prefs.zones[zone].title)
+                Text(zoneAction(zone).title)
                     .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(prefs.zones[zone] == .none ? Color.white.opacity(0.38) : Color.white)
+                    .foregroundStyle(zoneAction(zone) == .none ? Color.white.opacity(0.38) : Color.white)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
@@ -577,6 +637,24 @@ struct NovelReaderView: View {
         }
     }
 
+    private var availableActions: [TapAction] {
+        zoneTarget == .speech
+            ? TapAction.allCases
+            : TapAction.allCases.filter { !$0.isSpeechOnly }
+    }
+
+    private func zoneAction(_ zone: TapZone) -> TapAction {
+        zoneTarget == .speech ? prefs.speechZones[zone] : prefs.zones[zone]
+    }
+
+    private func setZoneAction(_ action: TapAction, for zone: TapZone) {
+        if zoneTarget == .speech {
+            prefs.speechZones[zone] = action
+        } else {
+            prefs.zones[zone] = action
+        }
+    }
+
     // MARK: 朗读控制
 
     private func startSpeech() {
@@ -590,7 +668,25 @@ struct NovelReaderView: View {
         wireSpeechCallbacks()
         speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
         speech.speak(text)
+        // 封面要在出声之后设置：setArtwork 会刷新 Now Playing，
+        // 还没出声时刷新会把卡片清掉。
+        if let url = env.library.absoluteCoverURL(for: model.book),
+           let image = UIImage(contentsOfFile: url.path) {
+            speech.setArtwork(image)
+        }
+        // 点听书 = 进入听书模式：菜单只剩底部的朗读面板，
+        // 点中间控制的是面板显隐，不再弹阅读菜单。
+        mode = .listening
         withAnimation(.easeInOut(duration: 0.18)) { model.isMenuVisible = true }
+    }
+
+    /// 退出听书，回到阅读模式。声音必须停干净，否则面板没了声音还在。
+    private func exitListening() {
+        stopSpeech()
+        withAnimation(.easeInOut(duration: 0.2)) {
+            mode = .reading
+            model.isMenuVisible = false
+        }
     }
 
     /// 一句念完后自动接下一句；本章念完自动接下一章；全书念完就停。
@@ -647,6 +743,36 @@ struct NovelReaderView: View {
         }
     }
 
+    // MARK: 听书九宫格的动作
+
+    private func speakPreviousSentence() {
+        guard model.isSpeechPrepared else { return }
+        if let text = model.rewindSpeechText() {
+            speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+            speech.speak(text)
+        }
+    }
+
+    private func speakNextSentence() {
+        guard model.isSpeechPrepared else { return }
+        if let text = model.advanceSpeechText() {
+            speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+            speech.speak(text)
+        } else if let next = model.beginNextChapterForSpeech() {
+            speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+            speech.speak(next)
+        }
+    }
+
+    private func toggleSpeechPlayback() {
+        guard model.isSpeechPrepared else { return }
+        if speech.isPaused {
+            speech.resume()
+        } else {
+            speech.pause()
+        }
+    }
+
     private func stopSpeech() {
         speech.stop()
         sleepWorkItem?.cancel()
@@ -662,7 +788,8 @@ struct NovelReaderView: View {
             sleepWorkItem = nil
             return
         }
-        let item = DispatchWorkItem { stopSpeech() }
+        // 到点不只是停下声音，而是退出听书——否则面板还挂着，用户以为它随时会再响。
+        let item = DispatchWorkItem { exitListening() }
         sleepWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + Double(minutes) * 60, execute: item)
     }
@@ -679,11 +806,17 @@ struct NovelReaderView: View {
                     .padding(.trailing, 15)
                     .padding(.bottom, 14)
             }
-            if model.isSpeechPrepared {
-                speechPanel
-            } else {
-                bottomPanel
-            }
+            bottomPanel
+        }
+        .transition(.opacity)
+    }
+
+    /// 听书模式的菜单：只有底部朗读面板，没有顶栏和侧栏。
+    /// 要回阅读菜单必须先退出听书——这是用户明确要的边界。
+    private var listeningLayer: some View {
+        VStack {
+            Spacer()
+            speechPanel
         }
         .transition(.opacity)
     }
@@ -716,7 +849,7 @@ struct NovelReaderView: View {
             },
             onCatalog: { sheet = .catalog },
             onSettings: { sheet = .settings(.typography) },
-            onExit: { stopSpeech() },
+            onExit: { exitListening() },
             onVoice: { sheet = .voice },
             onTimer: { showingTimerMenu = true }
         )

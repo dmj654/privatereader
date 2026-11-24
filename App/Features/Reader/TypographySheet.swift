@@ -15,6 +15,7 @@ struct TypographySheet: View {
     @ObservedObject var prefs: ReaderPreferences
     let onChange: () -> Void
     let onEditZones: () -> Void
+    let onEditSpeechZones: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -216,36 +217,27 @@ struct TypographySheet: View {
         VStack(alignment: .leading, spacing: 9) {
             sectionTitle("点击区域")
 
-            Button(action: onEditZones) {
-                HStack(spacing: 10) {
-                    Image(systemName: "hand.tap")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Palette.accent)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("屏幕区域功能")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Palette.ink)
-                        Text("九宫格逐格设置：翻页、菜单、上下章或无动作")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Palette.ink3)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Palette.ink3)
-                }
-                .padding(13)
-                .background(Palette.bg)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Palette.line, lineWidth: 1)
-                }
-            }
-            .buttonStyle(.plain)
+            zoneEntry(
+                symbol: "hand.tap",
+                title: "阅读区域",
+                detail: "九宫格逐格设置：翻页、菜单、上下章或无动作",
+                action: onEditZones
+            )
+
+            zoneEntry(
+                symbol: "headphones",
+                title: "听书区域",
+                detail: "九宫格逐格设置：上/下一句、暂停、翻页或无动作",
+                action: onEditSpeechZones
+            )
 
             if !prefs.zones.isUsable {
-                Text("九个区域全是「无动作」，点屏幕不会有反应。")
+                Text("阅读的九个区域全是「无动作」，点屏幕不会有反应。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.danger)
+            }
+            if !prefs.speechZones.isUsable {
+                Text("听书的九个区域全是「无动作」，听书时点屏幕不会有反应。")
                     .font(.system(size: 11))
                     .foregroundStyle(Palette.danger)
             }
@@ -254,6 +246,39 @@ struct TypographySheet: View {
         .overlay(alignment: .top) {
             Rectangle().fill(Palette.line).frame(height: 1)
         }
+    }
+
+    private func zoneEntry(symbol: String,
+                           title: String,
+                           detail: String,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Palette.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Palette.ink)
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.ink3)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.ink3)
+            }
+            .padding(13)
+            .background(Palette.bg)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Palette.line, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: 组件

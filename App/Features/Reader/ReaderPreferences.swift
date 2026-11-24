@@ -39,6 +39,10 @@ enum TapAction: String, CaseIterable, Codable, Identifiable {
     case toggleMenu
     case previousChapter
     case nextChapter
+    // 听书模式专用：让手指直接控制"念到哪"
+    case previousSentence
+    case nextSentence
+    case toggleSpeechPlayback
     case none
 
     var id: String { rawValue }
@@ -50,7 +54,18 @@ enum TapAction: String, CaseIterable, Codable, Identifiable {
         case .toggleMenu: return "呼出 / 收起菜单"
         case .previousChapter: return "上一章"
         case .nextChapter: return "下一章"
+        case .previousSentence: return "朗读上一句"
+        case .nextSentence: return "朗读下一句"
+        case .toggleSpeechPlayback: return "暂停 / 继续朗读"
         case .none: return "无动作"
+        }
+    }
+
+    /// 只在听书模式有意义的动作。编辑阅读区域时不该出现，避免点出一个"下一句"却没人念。
+    var isSpeechOnly: Bool {
+        switch self {
+        case .previousSentence, .nextSentence, .toggleSpeechPlayback: return true
+        default: return false
         }
     }
 }
@@ -92,24 +107,43 @@ enum TapZone: String, CaseIterable, Codable, Identifiable {
     ]
 }
 
+/// 九宫格的用途。阅读和听书各存一套，互不干扰。
+enum ZoneScheme: String, Codable {
+    case reading
+    case speech
+}
+
 struct TapZoneConfig: Codable, Equatable {
+    var scheme: ZoneScheme
     private var actions: [String: TapAction]
 
-    init() {
+    init(scheme: ZoneScheme = .reading) {
+        self.scheme = scheme
         var map: [String: TapAction] = [:]
         for zone in TapZone.allCases {
-            map[zone.rawValue] = Self.defaultAction(for: zone)
+            map[zone.rawValue] = Self.defaultAction(for: zone, scheme: scheme)
         }
         actions = map
     }
 
-    /// 默认：左列翻上一页、右列翻下一页、中列呼菜单。
+    /// 默认：左列往前、右列往后、中列呼菜单。
     /// 中间一整列都给菜单，是因为九宫格中间那一格很小，要求用户精确点在中心不现实。
-    static func defaultAction(for zone: TapZone) -> TapAction {
-        switch zone.column {
-        case 0: return .previousPage
-        case 2: return .nextPage
-        default: return .toggleMenu
+    ///
+    /// 听书时"往前/往后"是句，不是页——听书的人手放在屏幕上，想跳的是内容，不是版式。
+    static func defaultAction(for zone: TapZone, scheme: ZoneScheme = .reading) -> TapAction {
+        switch scheme {
+        case .reading:
+            switch zone.column {
+            case 0: return .previousPage
+            case 2: return .nextPage
+            default: return .toggleMenu
+            }
+        case .speech:
+            switch zone.column {
+            case 0: return .previousSentence
+            case 2: return .nextSentence
+            default: return .toggleMenu
+            }
         }
     }
 
@@ -124,21 +158,26 @@ struct TapZoneConfig: Codable, Equatable {
 
     // 手写 Codable：某个键缺失时补默认值，而不是整份配置解码失败。
     private enum CodingKeys: String, CodingKey {
+        case scheme
         case actions
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let scheme = (try? container.decodeIfPresent(ZoneScheme.self, forKey: .scheme)) ?? .reading
+        self.scheme = scheme
         let stored = (try? container.decode([String: TapAction].self, forKey: .actions)) ?? [:]
         var map: [String: TapAction] = [:]
         for zone in TapZone.allCases {
-            map[zone.rawValue] = stored[zone.rawValue] ?? Self.defaultAction(for: zone)
+            map[zone.rawValue] = stored[zone.rawValue]
+                ?? Self.defaultAction(for: zone, scheme: scheme)
         }
         actions = map
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(scheme, forKey: .scheme)
         try container.encode(actions, forKey: .actions)
     }
 }
@@ -156,6 +195,7 @@ final class ReaderPreferences: ObservableObject {
     private struct Snapshot: Codable {
         var pageTurn: PageTurnMode
         var zones: TapZoneConfig
+        var speechZones: TapZoneConfig?
         var style: ReaderStyle?
         var theme: ReaderTheme?
     }
@@ -179,6 +219,12 @@ final class ReaderPreferences: ObservableObject {
         didSet { persist() }
     }
 
+    /// 听书模式的九宫格。和阅读分开存：听书时手指想控制的是"念到哪一句"，
+    /// 阅读时想控制的是"翻到哪一页"，同一格不该共用一套动作。
+    @Published var speechZones: TapZoneConfig {
+        didSet { persist() }
+    }
+
     /// 字号、行距、字间距、段间距、页边距、字体、缩进、对齐。
     @Published var style: ReaderStyle {
         didSet { persist() }
@@ -194,6 +240,7 @@ final class ReaderPreferences: ObservableObject {
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
             pageTurn = snapshot.pageTurn
             zones = snapshot.zones
+            speechZones = snapshot.speechZones ?? TapZoneConfig(scheme: .speech)
             style = snapshot.style ?? .default
             theme = snapshot.theme ?? .day
             return
@@ -211,6 +258,7 @@ final class ReaderPreferences: ObservableObject {
                 }
             }
             zones = migrated
+            speechZones = TapZoneConfig(scheme: .speech)
             style = .default
             theme = .day
             persist()
@@ -219,12 +267,17 @@ final class ReaderPreferences: ObservableObject {
 
         pageTurn = .slide
         zones = TapZoneConfig()
+        speechZones = TapZoneConfig(scheme: .speech)
         style = .default
         theme = .day
     }
 
     private func persist() {
-        let snapshot = Snapshot(pageTurn: pageTurn, zones: zones, style: style, theme: theme)
+        let snapshot = Snapshot(pageTurn: pageTurn,
+                                zones: zones,
+                                speechZones: speechZones,
+                                style: style,
+                                theme: theme)
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         UserDefaults.standard.set(data, forKey: Self.keyV2)
     }

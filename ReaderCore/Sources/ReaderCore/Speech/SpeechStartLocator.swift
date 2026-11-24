@@ -17,31 +17,49 @@ public enum SpeechStartLocator {
     ///   - titleLength: 章标题的 UTF-16 长度；标题在整章文本的最前面
     ///   - skipTitle: 是否跳过章标题。只在从章首开始听时为 true
     /// - Returns: 应当开始朗读的句子下标
+    ///
+    /// 选句规则：**取这一页上开始的第一个完整句子**，而不是"包含页首的句子"。
+    ///
+    /// 后者在字号、行距变化后最容易出问题：分页会把一句话切成两半，
+    /// 页首落在句子中间，于是"这一页的第一句"其实是上一页那半句。
+    /// 朗读从上一页的内容开口，高亮也只亮在上一页——听感和视觉都错位。
+    /// 宁可漏掉页首那半句，也不要读了半天还停在上一页。
     public static func startIndex(sentences: [SpeechSentence],
                                   pageLocation: Int,
                                   titleLength: Int,
                                   skipTitle: Bool = true) -> Int {
         guard !sentences.isEmpty else { return 0 }
 
-        var index = locate(sentences: sentences, pageLocation: pageLocation)
+        var index = firstStartingAtOrAfter(sentences, location: pageLocation)
+        if index == nil {
+            // 整页都在一句话中间，页面上没有任何句子从头开始：
+            // 只能退回包含页首的那句，否则这一页没得读。
+            index = containing(sentences, location: pageLocation)
+        }
+        var start = index ?? 0
 
         if skipTitle, titleLength > 0 {
             // 标题占据 [0, titleLength)，后面紧跟换行。任何起点落在这一段里的句子
             // 都属于标题（标题里可能带句号、被切成多句），全部跳过。
-            while index < sentences.count, sentences[index].location < titleLength {
-                index += 1
+            while start < sentences.count, sentences[start].location < titleLength {
+                start += 1
             }
-            if index >= sentences.count { index = sentences.count - 1 }
+            if start >= sentences.count { start = sentences.count - 1 }
         }
-        return index
+        return start
     }
 
-    private static func locate(sentences: [SpeechSentence], pageLocation: Int) -> Int {
-        if let hit = sentences.firstIndex(where: { NSLocationInRange(pageLocation, $0.range) }) {
+    /// 页首之后（含正好等于页首）开始的第一句。
+    private static func firstStartingAtOrAfter(_ sentences: [SpeechSentence], location: Int) -> Int? {
+        sentences.firstIndex { $0.location >= location }
+    }
+
+    private static func containing(_ sentences: [SpeechSentence], location: Int) -> Int {
+        if let hit = sentences.firstIndex(where: { NSLocationInRange(location, $0.range) }) {
             return hit
         }
         // 页首落在空白里（上一句结尾与下一句开头之间）：取下一句。
-        if let next = sentences.firstIndex(where: { $0.location > pageLocation }) {
+        if let next = sentences.firstIndex(where: { $0.location > location }) {
             return next
         }
         return sentences.count - 1
