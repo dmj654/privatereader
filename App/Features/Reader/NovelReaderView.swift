@@ -743,8 +743,23 @@ struct NovelReaderView: View {
 
     // MARK: 听书九宫格的动作
 
+    /// 朗读已经停下时，从当前页重新拉起整条链路。
+    private func restartListeningFromCurrentPage() {
+        guard let text = model.prepareSpeech() else { return }
+        wireSpeechCallbacks()
+        speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+        speech.speak(text)
+        if let url = env.library.absoluteCoverURL(for: model.book),
+           let image = UIImage(contentsOfFile: url.path) {
+            speech.setArtwork(image)
+        }
+    }
+
     private func speakPreviousSentence() {
-        guard model.isSpeechPrepared else { return }
+        guard model.isSpeechPrepared else {
+            restartListeningFromCurrentPage()
+            return
+        }
         if let text = model.rewindSpeechText() {
             speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
             speech.speak(text)
@@ -752,7 +767,10 @@ struct NovelReaderView: View {
     }
 
     private func speakNextSentence() {
-        guard model.isSpeechPrepared else { return }
+        guard model.isSpeechPrepared else {
+            restartListeningFromCurrentPage()
+            return
+        }
         if let text = model.advanceSpeechText() {
             speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
             speech.speak(text)
@@ -824,6 +842,7 @@ struct NovelReaderView: View {
     private var speechPanel: some View {
         SpeechPanel(
             isPaused: speech.isPaused,
+            isStopped: !model.isSpeechPrepared,
             status: model.speechStatusText,
             detail: sleepLabel ?? model.speechDetailText,
             onPreviousChapter: {
@@ -835,6 +854,12 @@ struct NovelReaderView: View {
                 restartSpeechFromCurrentPage()
             },
             onTogglePlay: {
+                // 朗读队列已经结束（本章/全书读完，或恢复失败）时，
+                // 这个按钮应当把朗读从当前页重新拉起来，而不是点了没反应。
+                guard model.isSpeechPrepared else {
+                    restartListeningFromCurrentPage()
+                    return
+                }
                 if speech.isPaused { speech.resume() } else { speech.pause() }
             },
             onNextPage: {

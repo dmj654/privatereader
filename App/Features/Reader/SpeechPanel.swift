@@ -6,6 +6,8 @@ import AVFoundation
 /// 退出放正中做成主色胶囊：它是这一屏唯一"结束"的动作，值得被单独看见。
 struct SpeechPanel: View {
     let isPaused: Bool
+    /// 朗读队列已经结束：按钮要能重新开始，而不是显示"播放中"却点不动
+    let isStopped: Bool
     let status: String
     let detail: String
 
@@ -76,11 +78,11 @@ struct SpeechPanel: View {
                     Circle()
                         .fill(Palette.accent)
                         .frame(width: 46, height: 46)
-                    Image(systemName: isPaused ? "play.fill" : "pause.fill")
+                    Image(systemName: isPaused || isStopped ? "play.fill" : "pause.fill")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(.white)
                 }
-                Text(isPaused ? "已暂停" : "播放中")
+                Text(isStopped ? "继续听" : (isPaused ? "已暂停" : "播放中"))
                     .font(.system(size: 10))
                     .foregroundStyle(Palette.accent)
             }

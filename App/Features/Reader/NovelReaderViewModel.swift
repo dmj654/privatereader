@@ -459,6 +459,8 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     var speechStatusText: String {
+        // 队列已经没了还写"朗读中"，用户会以为卡死。如实说停了，点播放能重开。
+        guard isSpeechPrepared else { return "朗读已停止" }
         guard let speechIndex, speechSentences.indices.contains(speechIndex) else {
             return "朗读中"
         }
