@@ -85,9 +85,12 @@ final class ReaderStyleTests: XCTestCase {
         let color = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
         let attributes = style.attributes(color: color)
 
-        let font = attributes[.font] as? CTFont
-        XCTAssertNotNil(font)
-        XCTAssertEqual(CTFontGetSize(font!), 20, accuracy: 0.01)
+        guard let anyFont = attributes[.font] else {
+            return XCTFail("缺少字体属性")
+        }
+        // CTFont 是 CoreFoundation 类型，as? 会被判为恒成立，这里直接强制转型
+        let font = anyFont as! CTFont
+        XCTAssertEqual(CTFontGetSize(font), 20, accuracy: 0.01)
         XCTAssertNotNil(attributes[.paragraphStyle])
     }
 }
