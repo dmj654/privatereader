@@ -124,6 +124,20 @@ public enum RuleRunner {
             return purify(resolved, text: html)
         }
 
+        // `选择器@属性##净化`：先取值，再对取到的文字做净化。
+        // 这类写法在 ruleContent 里非常常见，不能把它整个丢给 CSS 解析。
+        if let purifyStart = resolved.range(of: "##") {
+            let base = String(resolved[..<purifyStart.lowerBound])
+            let purifyPart = "##" + resolved[purifyStart.upperBound...]
+            let value = evaluateString(base, html: html, baseUrl: baseUrl, variables: [:])
+            return purify(purifyPart, text: value)
+        }
+
+        // 纯地址 / 未替换的模板：直接原样返回，别拿去当 CSS 选择器
+        if isURLRule(resolved) || resolved.contains("{{") {
+            return resolved
+        }
+
         // 脚本规则：本阶段不执行，返回空串，调用方会当作"这条源不支持"
         if resolved.hasPrefix("@js:") || resolved.hasPrefix("<js>") {
             return ""
@@ -261,6 +275,12 @@ public enum RuleRunner {
     }
 
     // MARK: 模板
+
+    /// 纯地址规则：http(s) 开头，或以 / ./ ../ 开头的相对路径。
+    private static func isURLRule(_ text: String) -> Bool {
+        text.hasPrefix("http://") || text.hasPrefix("https://")
+            || text.hasPrefix("/") || text.hasPrefix("./") || text.hasPrefix("../")
+    }
 
     private static func applyVariables(_ rule: String, variables: [String: String]) -> String {
         guard rule.contains("{{"), !variables.isEmpty else { return rule }

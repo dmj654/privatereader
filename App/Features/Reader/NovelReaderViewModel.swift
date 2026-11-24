@@ -422,6 +422,28 @@ final class NovelReaderViewModel: ObservableObject {
 
     var isSpeechPrepared: Bool { speechQueue != nil }
 
+    /// 把两三个字的短句并到下一句。
+    ///
+    /// AVSpeechSynthesizer 对「喜欢。」这种极短 utterance 偶尔不回调完成，
+    /// 表现就是读到这儿停住不动。合并后至少四个字，避开这个边界。
+    /// 位置仍连续，高亮会同时覆盖这两句——它们本来就是连着的文字。
+    private static func mergeShortSentences(_ sentences: [SpeechSentence]) -> [SpeechSentence] {
+        var units: [SpeechSentence] = []
+        for sentence in sentences {
+            if let last = units.last, last.length < 4 {
+                let end = max(last.location + last.length, sentence.location + sentence.length)
+                units[units.count - 1] = SpeechSentence(
+                    text: last.text + sentence.text,
+                    location: last.location,
+                    length: end - last.location
+                )
+            } else {
+                units.append(sentence)
+            }
+        }
+        return units
+    }
+
     /// 准备朗读：从当前页开口，正好是眼睛看到的位置。
     ///
     /// 页首落在句子中间时，要把这句截断，从页首那半句念起——
