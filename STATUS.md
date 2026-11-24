@@ -108,3 +108,83 @@
 - 进度滑杆：从只读改为真的能拖，松手按百分比跳章（`ProgressMath.chapterIndex(fromPercent:)`）
 - 详情页「+」：原先什么都不做，改成「移到分组」菜单，能真的改分组
 - 主题 / 设置：拆成两种抽屉 —— 主题只管背景，设置管字号行距，不再点两个出同一个东西
+
+
+---
+
+# 交接说明（换设备 / 新会话请先读这一节）
+
+## 三十秒回到现场
+
+```
+当前版本 v1.0.2（build 3）｜83 个单元测试全绿｜M0–M4.5 完成
+代码：github.com/dmj654/privatereader（private）
+构建：GitHub Actions 的 macOS runner（本机是 Windows，没有 Xcode，不能本地编译）
+```
+
+## 项目是什么
+
+个人自用 iOS 小说 / 漫画阅读器，本地文件 + 在线书源双通道，数据全在手机，无账号无后端。
+需求见 `PRD.md`，里程碑与任务卡见 `DEVPLAN.md`，页面与视觉见 `design/` 两份 HTML。
+
+## 已经做完的
+
+| 里程碑 | 内容 |
+|---|---|
+| M0 | 工程骨架、设计令牌、毛玻璃、四 Tab |
+| M1 | 数据层：8 张表、7 个仓储、级联删除 |
+| M2 | txt / epub / pdf / cbz 解析、编码兜底、封面裁切 |
+| M3 | 书架、详情、分组 |
+| M4 | 小说阅读器：CoreText 分页、双排菜单、目录抽屉、四主题、进度记忆 |
+| M4.5 | 导入链路加固（asCopy + 目录扫描 + 日志 + 示例书诊断）、清掉所有空承诺 |
+
+## 关键决策（都已生效，改动前先看理由）
+
+- **章节正文**：首次打开解析原文件 → 内存缓存，**不写盘**。只有用户主动缓存才落盘。
+- **书源格式**：legado（开源阅读），不做自己的规则语法，不做"贴网址自动生成"。
+- **朗读**：iOS 系统语音（AVSpeechSynthesizer），不联网、不上传正文；音质偏机械是可接受代价。
+- **漫画**：只做单页 / 条漫，**不做横屏双页**。
+- **统计**：做，但不开独立 Tab，挂在主页。
+- **分页**：用 CoreText 而不是 TextKit，因为 CoreText 在 macOS 上也能跑，分页正确性因此可以在 CI 里真实单测。
+
+## 协作约定（用户明确表达过的）
+
+1. **不要每个里程碑停下来问"要不要继续"**。选型、默认值自己定，写清理由，继续往下做。
+2. 真正需要停的只有三种：需要真机验证（声音、观感）、需要用户提供材料（书源 JSON）、需要凭据（签名证书）。
+3. 问题分级：**空承诺（按钮可点但无反应）算真问题，必须修**；未实现但已声明的不算问题；视觉/手感攒着；交互模型类的结构性意见要早说。
+4. 界面与文档一律中文；不要出现没有反馈的控件——要么能用，要么给一句人话，要么明确置灰。
+5. 用户不接受"编造测试通过"。跑不了就说跑不了，并给出替代验证方式。
+
+## 已知的坑（踩过，别再踩）
+
+1. `Progress` 与 `Foundation.Progress` 重名 → 已改名 `ReadingProgress`
+2. GRDB 会自动建 `grdb_migrations` 表，断言建表清单时要排除
+3. SwiftSoup 的 `select()` 是 throwing，要 `try`
+4. `CTFont` 是 CF 类型，`as?` 会被判恒成立直接报错 → 用 `as!`
+5. `NSMutableParagraphStyle` 需要条件导入 AppKit / UIKit
+6. 同一视图挂多个 `.sheet` / `.confirmationDialog` 会互相抢占 → 合并成单一状态机
+7. SwiftUI `.fileImporter` 的 URL 依赖安全作用域授权，异步里会失效 → 用 `UIDocumentPickerViewController(asCopy: true)`
+8. iOS 会拒绝 `UIRequiredDeviceCapabilities = armv7`，构建时会自动改成 `arm64`
+
+## 出包
+
+```
+gh workflow run ipa.yml --ref main      # 约 3 分钟
+gh run download <run-id> -n PrivateReader-unsigned-ipa -D dist
+```
+
+产物是**未签名** IPA，必须用用户自己的证书或 Apple ID 签名后安装（Sideloadly / 爱思助手）。
+Bundle ID 固定 `com.dmj654.privatereader`，改了数据就没了。覆盖安装保数据，先删再装会丢。
+
+## 本机状态的一个坑
+
+`github.com:443` 经代理时常不通，`git push` 会失败，但 `api.github.com` 正常。
+这种情况下用 Git Data API 推送（blobs → tree → commit → PATCH ref）。
+副作用：本机提交号与远端不一致（内容一致）。**换设备 clone 不受影响**；
+在本机恢复时执行 `git fetch origin && git reset --hard origin/main` 即可对齐。
+
+## 下一步
+
+- **M5 朗读**：系统 TTS、逐句高亮跟随、双排控制面板、章末续读、锁屏控制、定时
+- **M6 书源引擎**：先 CSS + `&&` + `##` + `{{}}` + JSONPath（覆盖约 70% 文本源），再 JavaScriptCore + `java.*` 桥接补剩下的（漫画源主要靠这段）
+- 之后 M7 发现/搜索/在线阅读缓存、M8 漫画、M9 统计、M10 备份、M11 回归
