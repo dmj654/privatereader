@@ -10,6 +10,7 @@ private enum ShelfPresentation: Identifiable {
     case groupManager
     case report(ImportReport)
     case delete(Book)
+    case detail(Book)
 
     var id: String {
         switch self {
@@ -18,6 +19,7 @@ private enum ShelfPresentation: Identifiable {
         case .groupManager: return "groupManager"
         case .report: return "report"
         case .delete(let book): return "delete-\(book.id)"
+        case .detail(let book): return "detail-\(book.id)"
         }
     }
 }
@@ -34,6 +36,7 @@ struct ShelfView: View {
     @State private var presentation: ShelfPresentation?
     @State private var isImporting = false
     @State private var lastReport: ImportReport?
+    @State private var readingBook: Book?
     @State private var importError: String?
 
     private let columns = [
@@ -74,6 +77,10 @@ struct ShelfView: View {
             dialogButtons(for: item)
         } message: { item in
             dialogMessage(for: item)
+        }
+        .fullScreenCover(item: $readingBook, onDismiss: { reload() }) { book in
+            NovelReaderView(book: book, env: env)
+                .environmentObject(env)
         }
         .alert("导入失败", isPresented: Binding(
             get: { importError != nil },
@@ -130,6 +137,17 @@ struct ShelfView: View {
         case .report(let report):
             ImportResultSheet(report: report)
 
+        case .detail(let book):
+            NavigationStack {
+                DetailView(book: book)
+                    .environmentObject(env)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("关闭") { presentation = nil }
+                        }
+                    }
+            }
+
         case .importMenu, .delete:
             EmptyView()
         }
@@ -137,7 +155,7 @@ struct ShelfView: View {
 
     private func isSheet(_ item: ShelfPresentation) -> Bool {
         switch item {
-        case .picker, .groupManager, .report: return true
+        case .picker, .groupManager, .report, .detail: return true
         case .importMenu, .delete: return false
         }
     }
@@ -366,9 +384,8 @@ struct ShelfView: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 18) {
                     ForEach(displayBooks) { book in
-                        NavigationLink {
-                            DetailView(book: book)
-                                .environmentObject(env)
+                        Button {
+                            open(book)
                         } label: {
                             BookCell(
                                 book: book,
@@ -378,6 +395,7 @@ struct ShelfView: View {
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
+                            Button("查看详情") { presentation = .detail(book) }
                             Button("标记已读完") { markFinished(book) }
                             Button(book.groupId == BookGroup.builtinDroppedID ? "移回在追" : "标记弃读") { toggleDropped(book) }
                             Divider()
@@ -492,6 +510,16 @@ struct ShelfView: View {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         if lines.count > 60 { lines = Array(lines.suffix(60)) }
         return lines.joined(separator: "\n")
+    }
+
+    /// 点封面直接读——书架的第一用途是"接着上次读"，
+    /// 详情页退到长按菜单里，那是"我要管理这本书"时才需要的信息。
+    private func open(_ book: Book) {
+        if book.type == .novel {
+            readingBook = book
+        } else {
+            presentation = .detail(book)
+        }
     }
 
     // MARK: 书籍操作

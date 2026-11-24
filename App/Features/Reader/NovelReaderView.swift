@@ -18,15 +18,17 @@ struct NovelReaderView: View {
     @State private var showCatalog = false
     @State private var pending: PendingFeature?
     @State private var typographyFocus: TypographySheet.Focus = .typography
+    @State private var dragOffset: CGFloat = 0
     @State private var scrubValue: Double?
 
-    init(book: Book, env: AppEnvironment) {
+    init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
         _model = StateObject(wrappedValue: NovelReaderViewModel(
             book: book,
             provider: env.chapterProvider,
             progressRepo: env.progress,
             bookmarkRepo: env.bookmarks,
-            booksRepo: env.books
+            booksRepo: env.books,
+            initialChapter: initialChapter
         ))
     }
 
@@ -120,6 +122,7 @@ struct NovelReaderView: View {
             .padding(.horizontal, 22)
             .padding(.bottom, 8)
         }
+        .offset(x: dragOffset)
         .overlay(alignment: .center) {
             HStack(spacing: 0) {
                 tapZone { model.turnPage(by: -1) }
@@ -127,7 +130,42 @@ struct NovelReaderView: View {
                 tapZone { model.turnPage(by: 1) }
             }
         }
+        .simultaneousGesture(swipeGesture)
         .onChange(of: model.style) { _ in model.repaginate() }
+    }
+
+    /// 左右滑翻页。拖动时正文跟着手指走，松手按位移决定翻不翻。
+    /// 竖直方向的滑动不拦，留给系统（比如下拉通知中心）。
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                guard !model.isMenuVisible else { return }
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                let width = value.translation.width
+                // 第一页再往右、最后一页再往左，加点阻尼，让边界摸得出来
+                let atStart = model.pageIndex == 0 && model.chapterIndex == 0
+                let atEnd = model.chapterIndex >= model.chapters.count - 1
+                    && model.pageIndex >= model.pageCount - 1
+                if (width > 0 && atStart) || (width < 0 && atEnd) {
+                    dragOffset = width * 0.22
+                } else {
+                    dragOffset = width
+                }
+            }
+            .onEnded { value in
+                guard !model.isMenuVisible else {
+                    withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
+                    return
+                }
+                let width = value.translation.width
+                let horizontal = abs(width) > abs(value.translation.height)
+                let passed = abs(width) > 56
+
+                if horizontal && passed {
+                    model.turnPage(by: width < 0 ? 1 : -1)
+                }
+                withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
+            }
     }
 
     private func innerSize(_ size: CGSize) -> CGSize {

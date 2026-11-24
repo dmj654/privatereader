@@ -27,12 +27,16 @@ final class NovelReaderViewModel: ObservableObject {
     private var lastSavedAt: TimeInterval = 0
     private var sessionStartedAt: Date?
 
+    private let initialChapter: Int?
+
     init(book: Book,
          provider: ChapterProvider,
          progressRepo: ProgressRepository,
          bookmarkRepo: BookmarkRepository,
-         booksRepo: BookRepository) {
+         booksRepo: BookRepository,
+         initialChapter: Int? = nil) {
         self.book = book
+        self.initialChapter = initialChapter
         self.provider = provider
         self.progressRepo = progressRepo
         self.bookmarkRepo = bookmarkRepo
@@ -62,7 +66,9 @@ final class NovelReaderViewModel: ObservableObject {
         isLoading = true
         do {
             chapters = try provider.chapters(for: book)
-            if let saved = try progressRepo.fetch(bookId: book.id) {
+            if let initialChapter {
+                chapterIndex = min(max(initialChapter, 0), max(chapters.count - 1, 0))
+            } else if let saved = try progressRepo.fetch(bookId: book.id) {
                 chapterIndex = min(max(saved.chapterIndex, 0), max(chapters.count - 1, 0))
             }
             bookmarks = (try? bookmarkRepo.list(bookId: book.id)) ?? []
@@ -91,9 +97,36 @@ final class NovelReaderViewModel: ObservableObject {
         pageIndex = min(pageIndex, max(pageRanges.count - 1, 0))
     }
 
+    /// 章标题作为正文的第一段参与排版，而不是浮在正文上方的装饰。
+    /// 这样翻到本章第一页时标题自然出现在页首，分页也算得准，不会盖住文字。
     private func attributedBody(for chapter: NovelChapter) -> NSAttributedString {
-        let body = ReaderStyle.normalizedBody(chapter.body.isEmpty ? chapter.title : chapter.body)
-        return NSAttributedString(string: body, attributes: style.attributes(color: UIColor(theme.textColor).cgColor))
+        let color = UIColor(theme.textColor)
+        let result = NSMutableAttributedString()
+
+        let titleParagraph = NSMutableParagraphStyle()
+        titleParagraph.alignment = .center
+        titleParagraph.lineHeightMultiple = 1.45
+        titleParagraph.paragraphSpacing = 22
+        titleParagraph.paragraphSpacingBefore = 8
+
+        let titleFont = UIFont.systemFont(ofSize: style.fontSize * 1.45, weight: .semibold)
+        result.append(NSAttributedString(
+            string: chapter.title + "\n",
+            attributes: [
+                .font: titleFont,
+                .foregroundColor: color,
+                .paragraphStyle: titleParagraph
+            ]
+        ))
+
+        let body = ReaderStyle.normalizedBody(chapter.body.isEmpty ? "" : chapter.body)
+        if !body.isEmpty {
+            result.append(NSAttributedString(
+                string: body,
+                attributes: style.attributes(color: color.cgColor)
+            ))
+        }
+        return result
     }
 
     var currentPageText: NSAttributedString {

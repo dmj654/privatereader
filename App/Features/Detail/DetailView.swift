@@ -11,6 +11,9 @@ struct DetailView: View {
     @State private var showReader = false
     @State private var showComicNotice = false
     @State private var groups: [BookGroup] = []
+    @State private var chapterTitles: [String] = []
+    @State private var chaptersLoading = false
+    @State private var pendingChapter: Int?
     @State private var groupID: String?
 
     var body: some View {
@@ -33,6 +36,7 @@ struct DetailView: View {
             progress = try? env.progress.fetch(bookId: book.id)
             groups = (try? env.groups.all()) ?? []
             groupID = (try? env.books.fetch(id: book.id))?.groupId ?? book.groupId
+            loadChapterTitles()
         }
         .alert("漫画阅读器还没接上", isPresented: $showComicNotice) {
             Button("知道了", role: .cancel) {}
@@ -40,7 +44,7 @@ struct DetailView: View {
             Text("这一版能导入漫画、在书架里看到它，但单页 / 条漫阅读器要到下一阶段才有。小说现在就能读。")
         }
         .fullScreenCover(isPresented: $showReader) {
-            NovelReaderView(book: book, env: env)
+            NovelReaderView(book: book, env: env, initialChapter: pendingChapter)
                 .environmentObject(env)
         }
         .confirmationDialog("删除这本书？", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
@@ -104,6 +108,7 @@ struct DetailView: View {
         HStack(spacing: 10) {
             Button {
                 if book.type == .novel {
+                    pendingChapter = nil
                     showReader = true
                 } else {
                     showComicNotice = true
@@ -199,27 +204,74 @@ struct DetailView: View {
             .padding(.horizontal, Spacing.xl)
             .padding(.bottom, 10)
 
-            ForEach(0..<min(book.chapterCount, 5), id: \.self) { index in
-                HStack {
-                    Text("第 \(index + 1) 章")
-                        .font(Typo.body)
-                        .foregroundStyle(Palette.ink2)
-                    Spacer()
-                }
-                .padding(.horizontal, Spacing.xl)
-                .padding(.vertical, 14)
-                .background(Palette.surface)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Color(hex: 0xF3F6F9)).frame(height: 1)
-                }
-            }
-
-            if book.chapterCount > 5 {
-                Text("目录浏览在 M4 的阅读器中提供")
+            if book.type == .comic {
+                Text("漫画的话目录在阅读器里按「话」显示")
                     .font(Typo.micro)
                     .foregroundStyle(Palette.ink3)
                     .padding(.horizontal, Spacing.xl)
-                    .padding(.top, 12)
+                    .padding(.bottom, 10)
+            } else if chaptersLoading && chapterTitles.isEmpty {
+                ForEach(0..<3, id: \.self) { _ in
+                    SkeletonBox(height: 15)
+                        .padding(.horizontal, Spacing.xl)
+                        .padding(.vertical, 16)
+                }
+            } else if chapterTitles.isEmpty {
+                Text("目录读取失败，文件可能已被移动")
+                    .font(Typo.micro)
+                    .foregroundStyle(Palette.danger)
+                    .padding(.horizontal, Spacing.xl)
+                    .padding(.bottom, 10)
+            } else {
+                ForEach(Array(chapterTitles.prefix(8).enumerated()), id: \.offset) { index, title in
+                    Button {
+                        pendingChapter = index
+                        showReader = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text(title)
+                                .font(Typo.body)
+                                .foregroundStyle(Palette.ink2)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Palette.ink3.opacity(0.6))
+                        }
+                        .padding(.horizontal, Spacing.xl)
+                        .padding(.vertical, 14)
+                        .background(Palette.surface)
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(Color(hex: 0xF3F6F9)).frame(height: 1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if chapterTitles.count > 8 {
+                    Text("共 \(chapterTitles.count) 章，全部在阅读器的目录里")
+                        .font(Typo.micro)
+                        .foregroundStyle(Palette.ink3)
+                        .padding(.horizontal, Spacing.xl)
+                        .padding(.top, 12)
+                }
+            }
+        }
+    }
+
+    /// 详情页也要显示真实章节名，不能只写"第 N 章"。
+    /// 解析放在后台，`ChapterProvider` 会缓存，进阅读器时不会再解析一遍。
+    private func loadChapterTitles() {
+        guard book.type == .novel, book.chapterCount > 0 else { return }
+        chaptersLoading = true
+        let provider = env.chapterProvider
+        let target = book
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let titles = (try? provider.chapters(for: target))?.map(\.title) ?? []
+            DispatchQueue.main.async {
+                chapterTitles = titles
+                chaptersLoading = false
             }
         }
     }

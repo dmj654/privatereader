@@ -20,9 +20,25 @@ struct BookCoverView: View {
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
-                    Text(String(book.title.prefix(2)))
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.white.opacity(0.85))
+
+                    // 书名放全，按封面高度自动缩字号；四行还放不下才截断。
+                    VStack(spacing: 5) {
+                        Text(book.title)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.92))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(4)
+                            .minimumScaleFactor(0.62)
+
+                        if let author = book.author, !author.isEmpty {
+                            Text(author)
+                                .font(.system(size: 9))
+                                .foregroundStyle(Color.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 10)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
