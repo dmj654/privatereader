@@ -187,7 +187,7 @@ final class NovelReaderViewModel: ObservableObject {
             return NSAttributedString(string: "")
         }
         let range = pageRanges[pageIndex]
-        guard let page = slice(attributed, range) else { return attributed }
+        guard let page = pageSlice(attributed, range) else { return attributed }
         applySpeechHighlight(to: page, pageRange: range)
         return page
     }
@@ -210,7 +210,7 @@ final class NovelReaderViewModel: ObservableObject {
     /// 分页会从段落中间切页。下一页开头这半段其实还是上一段的延续，
     /// 但 CoreText 会把它当成本段第一行，把首行缩进照搬过来——
     /// 视觉上就像凭空多了一个段落。这里把续页首段的缩进和段前距清掉。
-    private func slice(_ attributed: NSAttributedString, _ range: NSRange) -> NSMutableAttributedString? {
+    private func pageSlice(_ attributed: NSAttributedString, _ range: NSRange) -> NSMutableAttributedString? {
         guard range.location >= 0,
               range.location + range.length <= attributed.length else { return nil }
 
@@ -298,7 +298,7 @@ final class NovelReaderViewModel: ObservableObject {
 
         if pageRanges.indices.contains(target) {
             guard let attributed = chapterAttributed() else { return nil }
-            return slice(attributed, pageRanges[target])
+            return pageSlice(attributed, pageRanges[target])
         }
 
         let neighbor = chapterIndex + (offset > 0 ? 1 : -1)
@@ -307,13 +307,7 @@ final class NovelReaderViewModel: ObservableObject {
         let attributed = attributedBody(for: chapters[neighbor])
         let ranges = Paginator.pageRanges(attributedString: attributed, pageSize: lastPageSize)
         guard let range = offset > 0 ? ranges.first : ranges.last else { return nil }
-        return slice(attributed, range)
-    }
-
-    private func slice(_ attributed: NSAttributedString, _ range: NSRange) -> NSAttributedString? {
-        guard range.location >= 0,
-              range.location + range.length <= attributed.length else { return nil }
-        return attributed.attributedSubstring(from: range)
+        return pageSlice(attributed, range)
     }
 
     /// 还能不能往这个方向翻。翻不动时不要再播动画，否则会出现"滑走又滑回原样"的怪现象。
