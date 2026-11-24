@@ -3,6 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "design/**"
+      - "PRD.md"
+      - "DEVPLAN.md"
   pull_request:
   workflow_dispatch:
 
@@ -17,6 +22,14 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
+      - name: 缓存 SwiftPM 依赖与构建产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            ReaderCore/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: spm-${{ hashFiles('ReaderCore/Package.swift', 'ReaderCore/Package.resolved') }}
+          restore-keys: spm-
       - name: 工具链版本
         run: swift --version
       - name: 运行测试
