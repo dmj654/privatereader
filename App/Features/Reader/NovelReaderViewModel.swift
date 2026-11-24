@@ -167,6 +167,15 @@ final class NovelReaderViewModel: ObservableObject {
         persistProgress()
     }
 
+    /// 还能不能往这个方向翻。翻不动时不要再播动画，否则会出现"滑走又滑回原样"的怪现象。
+    func canTurn(by delta: Int) -> Bool {
+        guard !chapters.isEmpty else { return false }
+        if delta < 0 {
+            return pageIndex > 0 || chapterIndex > 0
+        }
+        return pageIndex < max(pageRanges.count - 1, 0) || chapterIndex < chapters.count - 1
+    }
+
     /// 按全书百分比跳章。滑杆松手时调用。
     func seek(toPercent percent: Double) {
         guard !chapters.isEmpty else { return }

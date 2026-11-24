@@ -11,6 +11,7 @@ private enum ShelfPresentation: Identifiable {
     case report(ImportReport)
     case delete(Book)
     case detail(Book)
+    case bookActions(Book)
 
     var id: String {
         switch self {
@@ -20,6 +21,7 @@ private enum ShelfPresentation: Identifiable {
         case .report: return "report"
         case .delete(let book): return "delete-\(book.id)"
         case .detail(let book): return "detail-\(book.id)"
+        case .bookActions(let book): return "actions-\(book.id)"
         }
     }
 }
@@ -148,6 +150,43 @@ struct ShelfView: View {
                     }
             }
 
+        case .bookActions(let book):
+            BookActionsSheet(
+                book: book,
+                coverURL: env.library.absoluteCoverURL(for: book),
+                groups: groups,
+                currentGroupID: book.groupId,
+                onDetail: {
+                    presentation = nil
+                    afterDismiss { presentation = .detail(book) }
+                },
+                onMove: { groupID in
+                    try? env.books.updateGroup(bookId: book.id, groupId: groupID)
+                    presentation = nil
+                    reload()
+                },
+                onFinished: {
+                    try? env.books.updateStatus(bookId: book.id,
+                                                status: book.status == .finished ? .reading : .finished)
+                    presentation = nil
+                    reload()
+                },
+                onToggleDropped: {
+                    let target = book.groupId == BookGroup.builtinDroppedID
+                        ? BookGroup.builtinReadingID
+                        : BookGroup.builtinDroppedID
+                    try? env.books.updateGroup(bookId: book.id, groupId: target)
+                    presentation = nil
+                    reload()
+                },
+                onDelete: {
+                    presentation = nil
+                    afterDismiss { presentation = .delete(book) }
+                }
+            )
+            .presentationDetents([.height(452)])
+            .presentationDragIndicator(.visible)
+
         case .importMenu, .delete:
             EmptyView()
         }
@@ -155,7 +194,7 @@ struct ShelfView: View {
 
     private func isSheet(_ item: ShelfPresentation) -> Bool {
         switch item {
-        case .picker, .groupManager, .report, .detail: return true
+        case .picker, .groupManager, .report, .detail, .bookActions: return true
         case .importMenu, .delete: return false
         }
     }
@@ -384,25 +423,17 @@ struct ShelfView: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 18) {
                     ForEach(displayBooks) { book in
-                        Button {
-                            open(book)
-                        } label: {
-                            BookCell(
-                                book: book,
-                                coverURL: env.library.absoluteCoverURL(for: book),
-                                progress: progressByBook[book.id] ?? 0
-                            )
+                        BookCell(
+                            book: book,
+                            coverURL: env.library.absoluteCoverURL(for: book),
+                            progress: progressByBook[book.id] ?? 0
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture { open(book) }
+                        .onLongPressGesture(minimumDuration: 0.35) {
+                            presentation = .bookActions(book)
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("查看详情") { presentation = .detail(book) }
-                            Button("标记已读完") { markFinished(book) }
-                            Button(book.groupId == BookGroup.builtinDroppedID ? "移回在追" : "标记弃读") { toggleDropped(book) }
-                            Divider()
-                            Button("删除", role: .destructive) {
-                                presentation = .delete(book)
-                            }
-                        }
+                        .accessibilityAddTraits(.isButton)
                     }
                 }
                 .padding(.horizontal, Spacing.xl)
@@ -515,6 +546,8 @@ struct ShelfView: View {
     /// 点封面直接读——书架的第一用途是"接着上次读"，
     /// 详情页退到长按菜单里，那是"我要管理这本书"时才需要的信息。
     private func open(_ book: Book) {
+        // 长按已经弹出面板时，松手不再当作点击
+        guard presentation == nil else { return }
         if book.type == .novel {
             readingBook = book
         } else {
@@ -529,16 +562,5 @@ struct ShelfView: View {
         reload()
     }
 
-    private func markFinished(_ book: Book) {
-        try? env.books.updateStatus(bookId: book.id, status: .finished)
-        reload()
-    }
 
-    private func toggleDropped(_ book: Book) {
-        let target = book.groupId == BookGroup.builtinDroppedID
-            ? BookGroup.builtinReadingID
-            : BookGroup.builtinDroppedID
-        try? env.books.updateGroup(bookId: book.id, groupId: target)
-        reload()
-    }
 }

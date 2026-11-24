@@ -9,16 +9,30 @@ private struct PendingFeature: Identifiable {
     let detail: String
 }
 
+/// 阅读器里的弹出层，合成一个状态机，避免多个 sheet 互相抢占。
+private enum ReaderSheet: Identifiable {
+    case catalog
+    case settings(TypographySheet.Focus)
+
+    var id: String {
+        switch self {
+        case .catalog: return "catalog"
+        case .settings(let focus): return "settings-\(focus == .theme ? "theme" : "full")"
+        }
+    }
+}
+
 struct NovelReaderView: View {
     @StateObject private var model: NovelReaderViewModel
+    @StateObject private var prefs = ReaderPreferences()
     @EnvironmentObject private var env: AppEnvironment
     @Environment(\.dismiss) private var dismiss
 
-    @State private var showTypography = false
-    @State private var showCatalog = false
+    @State private var sheet: ReaderSheet?
     @State private var pending: PendingFeature?
-    @State private var typographyFocus: TypographySheet.Focus = .typography
-    @State private var dragOffset: CGFloat = 0
+    @State private var contentOffset: CGFloat = 0
+    @State private var contentOpacity: Double = 1
+    @State private var viewWidth: CGFloat = 390
     @State private var scrubValue: Double?
 
     init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
@@ -50,6 +64,8 @@ struct NovelReaderView: View {
                 }
             }
             .statusBarHidden(model.isMenuVisible == false)
+            .onAppear { viewWidth = proxy.size.width }
+            .onChange(of: proxy.size) { viewWidth = $0.width }
         }
         .navigationBarHidden(true)
         .preferredColorScheme(model.theme.chromeStyle)
@@ -62,11 +78,29 @@ struct NovelReaderView: View {
                                                         durationSec: seconds))
             }
         }
-        .sheet(isPresented: $showTypography) {
-            TypographySheet(style: $model.style, theme: $model.theme, focus: typographyFocus) {
-                model.repaginate()
+        .sheet(item: $sheet) { item in
+            switch item {
+            case .catalog:
+                CatalogSheet(
+                    book: model.book,
+                    coverURL: env.library.absoluteCoverURL(for: model.book),
+                    chapters: model.chapters,
+                    currentIndex: model.chapterIndex,
+                    progressPercent: model.progressPercent,
+                    bookmarks: model.bookmarks,
+                    onSelect: { index in model.jump(toChapter: index) },
+                    onDeleteBookmark: { model.removeBookmark($0) }
+                )
+                .presentationDetents([.fraction(0.72), .large])
+                .presentationDragIndicator(.visible)
+
+            case .settings(let focus):
+                TypographySheet(style: $model.style, theme: $model.theme, focus: focus, prefs: prefs) {
+                    model.repaginate()
+                }
+                .presentationDetents(detents(for: focus))
+                .presentationDragIndicator(.visible)
             }
-            .presentationDetents([.height(typographyFocus == .theme ? 210 : 300)])
         }
         .alert(
             pending?.title ?? "",
@@ -79,20 +113,10 @@ struct NovelReaderView: View {
         } message: {
             Text(pending?.detail ?? "")
         }
-        .overlay {
-            if showCatalog {
-                CatalogDrawer(
-                    chapters: model.chapters,
-                    currentIndex: model.chapterIndex,
-                    bookmarks: model.bookmarks,
-                    onSelect: { index in
-                        model.jump(toChapter: index)
-                        showCatalog = false
-                    },
-                    onClose: { showCatalog = false }
-                )
-            }
-        }
+    }
+
+    private func detents(for focus: TypographySheet.Focus) -> Set<PresentationDetent> {
+        focus == .theme ? [.height(210)] : [.fraction(0.82), .large]
     }
 
     // MARK: 正文
@@ -122,61 +146,144 @@ struct NovelReaderView: View {
             .padding(.horizontal, 22)
             .padding(.bottom, 8)
         }
-        .offset(x: dragOffset)
+        .opacity(contentOpacity)
+        .offset(x: contentOffset)
         .overlay(alignment: .center) {
             HStack(spacing: 0) {
-                tapZone { model.turnPage(by: -1) }
-                tapZone { withAnimation(.easeInOut(duration: 0.18)) { model.isMenuVisible.toggle() } }
-                tapZone { model.turnPage(by: 1) }
+                tapZone(.left)
+                tapZone(.center)
+                tapZone(.right)
             }
         }
         .simultaneousGesture(swipeGesture)
         .onChange(of: model.style) { _ in model.repaginate() }
     }
 
-    /// 左右滑翻页。拖动时正文跟着手指走，松手按位移决定翻不翻。
-    /// 竖直方向的滑动不拦，留给系统（比如下拉通知中心）。
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 12)
-            .onChanged { value in
-                guard !model.isMenuVisible else { return }
-                guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                let width = value.translation.width
-                // 第一页再往右、最后一页再往左，加点阻尼，让边界摸得出来
-                let atStart = model.pageIndex == 0 && model.chapterIndex == 0
-                let atEnd = model.chapterIndex >= model.chapters.count - 1
-                    && model.pageIndex >= model.pageCount - 1
-                if (width > 0 && atStart) || (width < 0 && atEnd) {
-                    dragOffset = width * 0.22
-                } else {
-                    dragOffset = width
-                }
-            }
-            .onEnded { value in
-                guard !model.isMenuVisible else {
-                    withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
-                    return
-                }
-                let width = value.translation.width
-                let horizontal = abs(width) > abs(value.translation.height)
-                let passed = abs(width) > 56
-
-                if horizontal && passed {
-                    model.turnPage(by: width < 0 ? 1 : -1)
-                }
-                withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
-            }
-    }
-
     private func innerSize(_ size: CGSize) -> CGSize {
         CGSize(width: size.width - 44, height: size.height - 8)
     }
 
-    private func tapZone(action: @escaping () -> Void) -> some View {
+    // MARK: 点击区域
+
+    private func tapZone(_ zone: TapZone) -> some View {
         Rectangle()
             .fill(Color.clear)
             .contentShape(Rectangle())
-            .onTapGesture(perform: action)
+            .onTapGesture { perform(prefs.zones.action(for: zone)) }
+    }
+
+    private func perform(_ action: TapAction) {
+        switch action {
+        case .previousPage:
+            turn(by: -1)
+        case .nextPage:
+            turn(by: 1)
+        case .toggleMenu:
+            withAnimation(.easeInOut(duration: 0.18)) { model.isMenuVisible.toggle() }
+        case .previousChapter:
+            model.jump(toChapter: model.chapterIndex - 1)
+        case .nextChapter:
+            model.jump(toChapter: model.chapterIndex + 1)
+        case .none:
+            break
+        }
+    }
+
+    // MARK: 翻页
+
+    private func turn(by direction: Int) {
+        guard model.canTurn(by: direction) else { return }
+
+        switch prefs.pageTurn {
+        case .none:
+            model.turnPage(by: direction)
+        case .fade:
+            crossFade(direction)
+        case .slide, .follow:
+            slideIn(direction)
+        }
+    }
+
+    /// 淡出 → 换页 → 淡入。UIKit 视图不适合做位移动画，透明度过得最稳。
+    private func crossFade(_ direction: Int) {
+        guard contentOpacity > 0.5 else { return }
+        withAnimation(.easeInOut(duration: 0.12)) { contentOpacity = 0 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.13) {
+            model.turnPage(by: direction)
+            withAnimation(.easeInOut(duration: 0.16)) { contentOpacity = 1 }
+        }
+    }
+
+    /// 先在屏幕外放好新页，再推进来。
+    private func slideIn(_ direction: Int) {
+        model.turnPage(by: direction)
+        contentOffset = CGFloat(direction) * max(viewWidth, 1)
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.22)) { contentOffset = 0 }
+        }
+    }
+
+    /// 滑动手势松手后：先把当前页送出去，再从另一侧接上新页。
+    /// 两段动画分两个 runloop，避免"文字在屏幕中间突然变掉"的观感。
+    private func commitSwipe(direction: Int) {
+        guard model.canTurn(by: direction) else {
+            withAnimation(.easeOut(duration: 0.18)) { contentOffset = 0 }
+            return
+        }
+
+        switch prefs.pageTurn {
+        case .none:
+            withAnimation(.easeOut(duration: 0.12)) { contentOffset = 0 }
+            model.turnPage(by: direction)
+
+        case .fade:
+            withAnimation(.easeOut(duration: 0.12)) { contentOffset = 0 }
+            crossFade(direction)
+
+        case .slide, .follow:
+            let width = max(viewWidth, 1)
+            withAnimation(.easeOut(duration: 0.16)) {
+                contentOffset = -CGFloat(direction) * width
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.17) {
+                model.turnPage(by: direction)
+                contentOffset = CGFloat(direction) * width
+                DispatchQueue.main.async {
+                    withAnimation(.easeOut(duration: 0.2)) { contentOffset = 0 }
+                }
+            }
+        }
+    }
+
+    /// 左右滑。竖直方向不拦，留给系统手势。
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                guard !model.isMenuVisible else { return }
+                guard prefs.pageTurn == .slide || prefs.pageTurn == .follow else { return }
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+
+                let width = value.translation.width
+                let atStart = !model.canTurn(by: -1)
+                let atEnd = !model.canTurn(by: 1)
+                if (width > 0 && atStart) || (width < 0 && atEnd) {
+                    contentOffset = width * 0.22
+                } else {
+                    contentOffset = width
+                }
+            }
+            .onEnded { value in
+                guard !model.isMenuVisible else {
+                    withAnimation(.easeOut(duration: 0.2)) { contentOffset = 0 }
+                    return
+                }
+                let width = value.translation.width
+                guard abs(width) > abs(value.translation.height), abs(width) > 56 else {
+                    withAnimation(.easeOut(duration: 0.18)) { contentOffset = 0 }
+                    return
+                }
+                commitSwipe(direction: width < 0 ? 1 : -1)
+            }
     }
 
     // MARK: 菜单
@@ -231,10 +338,10 @@ struct NovelReaderView: View {
             sideButton("magnifyingglass") {
                 pending = PendingFeature(
                     title: "全书搜索还没接上",
-                    detail: "现在可以搜目录：点下面的目录按钮，里面有搜索框。正文全文搜索会跟书源搜索一起做。"
+                    detail: "现在可以搜目录：点目录按钮，里面有搜索框。正文全文搜索会跟书源搜索一起做。"
                 )
             }
-            sideButton("list.bullet") { showCatalog = true }
+            sideButton("list.bullet") { sheet = .catalog }
             sideButton("play") {
                 pending = PendingFeature(
                     title: "自动阅读还没接上",
@@ -293,17 +400,15 @@ struct NovelReaderView: View {
             .padding(.horizontal, 20)
 
             HStack {
-                panelItem("list.bullet", "目录") { showCatalog = true }
+                panelItem("list.bullet", "目录") { sheet = .catalog }
                 panelItem("sun.max", "白天") {
                     model.theme = model.theme.isDark ? .day : .night
                 }
                 panelItem("circle.lefthalf.filled", "主题") {
-                    typographyFocus = .theme
-                    showTypography = true
+                    sheet = .settings(.theme)
                 }
                 panelItem("slider.horizontal.3", "设置") {
-                    typographyFocus = .typography
-                    showTypography = true
+                    sheet = .settings(.typography)
                 }
                 panelItem("arrow.down.to.line", "缓存") {
                     pending = PendingFeature(
