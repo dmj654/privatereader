@@ -211,7 +211,7 @@ final class SpeechEngine: NSObject, ObservableObject {
             self.recoverFromStall()
         }
         startWatchdog = startItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: startItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: startItem)
 
         armFinishWatchdog(for: text, generation: generation)
     }
@@ -231,7 +231,25 @@ final class SpeechEngine: NSObject, ObservableObject {
             self.recoverFromStall()
         }
         finishWatchdog = finishItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + expected * 1.8 + 8, execute: finishItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + expected * 1.4 + 6, execute: finishItem)
+    }
+
+    /// 进度心跳：合成器每准备念一段文字就会回调一次 willSpeakRange。
+    /// 只要还在推进，就把看门狗往后推；8 秒没有新进度，就是真的卡住了。
+    ///
+    /// 之前只用"按字数估算总时长"来兜底，一句 2 个字的短句要等十几秒才判定卡死，
+    /// 用户体感就是"读到这儿就不动了"。
+    private func armProgressWatchdog() {
+        finishWatchdog?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self,
+                  self.isPlaybackRequested,
+                  self.isSpeaking,
+                  !self.isPaused else { return }
+            self.recoverFromStall()
+        }
+        finishWatchdog = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: item)
     }
 
     private func recoverFromStall() {
@@ -497,7 +515,20 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
             self.stallRecoveries = 0
             self.isSpeaking = true
             self.isPaused = false
+            self.armProgressWatchdog()
             self.updateNowPlaying()
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
+                           willSpeakRangeOfSpeechString characterRange: NSRange,
+                           utterance: AVSpeechUtterance) {
+        DispatchQueue.main.async {
+            guard utterance === self.currentUtterance else { return }
+            // 有进度就说明没卡，把看门狗往后推
+            self.hasStartedCurrent = true
+            self.stallRecoveries = 0
+            self.armProgressWatchdog()
         }
     }
 

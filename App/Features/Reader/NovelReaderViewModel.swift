@@ -28,6 +28,10 @@ final class NovelReaderViewModel: ObservableObject {
     @Published private(set) var speechIndex: Int?
     private var speechQueue: SpeechQueue?
     private var speechSentences: [SpeechSentence] = []
+    /// 实际送进合成器的朗读单元 = 原始句子，但把过短的句子并到后一句。
+    /// AVSpeechSynthesizer 对「喜欢。」这种两三个字的 utterance 偶尔不回调完成，
+    /// 表现为读到这儿就停住；合并后就不会出现极短的一条。
+    private var speechUnits: [SpeechSentence] = []
     private var speechSentenceKey: CacheKey?
 
     @Published private(set) var chapters: [NovelChapter] = []
@@ -428,9 +432,10 @@ final class NovelReaderViewModel: ObservableObject {
 
         if speechSentenceKey != key || speechSentences.isEmpty {
             speechSentences = SentenceSplitter.split(attributed.string)
+            speechUnits = Self.mergeShortSentences(speechSentences)
             speechSentenceKey = key
         }
-        guard !speechSentences.isEmpty else { return nil }
+        guard !speechUnits.isEmpty else { return nil }
 
         var start = SpeechStart(index: 0, characterOffset: 0)
         if startAtCurrentPage, pageRanges.indices.contains(pageIndex) {
@@ -438,13 +443,13 @@ final class NovelReaderViewModel: ObservableObject {
             // 否则"那一页的第一句"（正文第一句）会被标题顶掉。
             let titleLength = (currentChapter?.title as NSString?)?.length ?? 0
             start = SpeechStartLocator.start(
-                sentences: speechSentences,
+                sentences: speechUnits,
                 pageLocation: pageRanges[pageIndex].location,
                 titleLength: titleLength
             )
         }
 
-        var queueSentences = speechSentences
+        var queueSentences = speechUnits
         var queueStart = start.index
 
         if start.characterOffset > 0, queueSentences.indices.contains(start.index) {
@@ -519,6 +524,7 @@ final class NovelReaderViewModel: ObservableObject {
         cachedAttributed = nil
         speechSentenceKey = nil
         speechSentences = []
+        speechUnits = []
         repaginate()
 
         persistProgress(force: true)
@@ -538,16 +544,13 @@ final class NovelReaderViewModel: ObservableObject {
 
     var speechStatusText: String {
         // 队列已经没了还写"朗读中"，用户会以为卡死。如实说停了，点播放能重开。
-        guard isSpeechPrepared else { return "朗读已停止" }
-        guard let speechIndex, speechSentences.indices.contains(speechIndex) else {
-            return "朗读中"
-        }
-        return "朗读中 · 第 \(chapterIndex + 1) 章 第 \(speechIndex + 1)/\(speechSentences.count) 句"
+        guard let queue = speechQueue else { return "朗读已停止" }
+        return "朗读中 · 第 \(chapterIndex + 1) 章 第 \(queue.index + 1)/\(queue.count) 句"
     }
 
     var speechDetailText: String {
-        guard let speechIndex, speechSentences.indices.contains(speechIndex) else { return "" }
-        let remaining = max(speechSentences.count - speechIndex - 1, 0)
+        guard let queue = speechQueue else { return "" }
+        let remaining = max(queue.count - queue.index - 1, 0)
         return "本章还剩 \(remaining) 句"
     }
 
