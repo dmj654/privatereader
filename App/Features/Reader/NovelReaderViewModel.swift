@@ -10,6 +10,10 @@ final class NovelReaderViewModel: ObservableObject {
     private let progressRepo: ProgressRepository
     private let bookmarkRepo: BookmarkRepository
     private let booksRepo: BookRepository
+    private let positionStore: ReadingPositionStore
+    private let log: ImportLog?
+    private var pendingPage: Int?
+    private var lastLoggedChapter = -1
 
     @Published private(set) var chapters: [NovelChapter] = []
     @Published var chapterIndex: Int = 0
@@ -34,13 +38,16 @@ final class NovelReaderViewModel: ObservableObject {
          progressRepo: ProgressRepository,
          bookmarkRepo: BookmarkRepository,
          booksRepo: BookRepository,
-         initialChapter: Int? = nil) {
+         initialChapter: Int? = nil,
+         log: ImportLog? = nil) {
         self.book = book
         self.initialChapter = initialChapter
         self.provider = provider
         self.progressRepo = progressRepo
         self.bookmarkRepo = bookmarkRepo
         self.booksRepo = booksRepo
+        self.positionStore = ReadingPositionStore(repo: progressRepo)
+        self.log = log
     }
 
     var currentChapter: NovelChapter? {
@@ -68,8 +75,13 @@ final class NovelReaderViewModel: ObservableObject {
             chapters = try provider.chapters(for: book)
             if let initialChapter {
                 chapterIndex = min(max(initialChapter, 0), max(chapters.count - 1, 0))
-            } else if let saved = try progressRepo.fetch(bookId: book.id) {
-                chapterIndex = min(max(saved.chapterIndex, 0), max(chapters.count - 1, 0))
+                pendingPage = nil
+            } else if let saved = positionStore.restore(bookId: book.id, chapterCount: chapters.count) {
+                chapterIndex = saved.chapterIndex
+                pendingPage = saved.pageIndex
+                log?.append("恢复位置：第 \(saved.chapterIndex + 1) 章 第 \(saved.pageIndex + 1) 页")
+            } else {
+                log?.append("无历史位置，从第 1 章开始")
             }
             bookmarks = (try? bookmarkRepo.list(bookId: book.id)) ?? []
             sessionStartedAt = Date()
@@ -88,6 +100,14 @@ final class NovelReaderViewModel: ObservableObject {
         guard size != lastPageSize || pageRanges.isEmpty else { return }
         lastPageSize = size
         repaginate()
+        applyPendingPage()
+    }
+
+    /// 分页尺寸拿到之后才知道总页数，所以页码要等第一次重排完再落。
+    private func applyPendingPage() {
+        guard let pending = pendingPage else { return }
+        pageIndex = min(max(pending, 0), max(pageRanges.count - 1, 0))
+        pendingPage = nil
     }
 
     func repaginate() {
@@ -144,6 +164,7 @@ final class NovelReaderViewModel: ObservableObject {
 
     func turnPage(by delta: Int) {
         guard !chapters.isEmpty else { return }
+        pendingPage = nil
         let target = pageIndex + delta
         if target < 0 {
             if chapterIndex > 0 {
@@ -197,6 +218,7 @@ final class NovelReaderViewModel: ObservableObject {
 
     func jump(toChapter index: Int) {
         guard chapters.indices.contains(index) else { return }
+        pendingPage = nil
         chapterIndex = index
         repaginate()
         pageIndex = 0
@@ -205,22 +227,38 @@ final class NovelReaderViewModel: ObservableObject {
 
     // MARK: 持久化
 
+    /// 保存阅读位置。
+    /// 以前整个函数用 `try?` 包着，写失败完全没有痕迹——这就是"读到第 4 章、下次回到第 1 章"
+    /// 查不出来的原因。现在失败会写进日志，成功也会读回来核对一次。
     func persistProgress(force: Bool = false) {
+        guard chapters.count > 0 else { return }
+
         let now = Date().timeIntervalSince1970
         guard force || now - lastSavedAt > 1 else { return }
         lastSavedAt = now
 
-        let within = pageCount > 1 ? Double(pageIndex) / Double(pageCount - 1) : 0
-        let percent = ProgressMath.percent(chapterIndex: chapterIndex, chapterCount: chapters.count, chapterProgress: within)
-        let record = ReadingProgress(
-            bookId: book.id,
-            chapterIndex: chapterIndex,
-            offset: pageIndex,
-            percent: percent,
-            updatedAt: Int(now)
-        )
-        try? progressRepo.save(record)
-        try? booksRepo.touch(bookId: book.id, at: Int(now))
+        let position = ReadingPosition(chapterIndex: chapterIndex, pageIndex: pageIndex)
+        do {
+            guard let record = try positionStore.save(
+                bookId: book.id,
+                position: position,
+                pageCount: pageCount,
+                chapterCount: chapters.count,
+                timestamp: Int(now)
+            ) else { return }
+
+            let verified = positionStore.verify(bookId: book.id, expecting: record)
+            if !verified {
+                log?.append("保存位置校验失败：期望第 \(record.chapterIndex + 1) 章，读回不一致")
+            } else if record.chapterIndex != lastLoggedChapter {
+                lastLoggedChapter = record.chapterIndex
+                log?.append("保存位置：第 \(record.chapterIndex + 1) 章，全书 \(Int(record.percent * 100))%")
+            }
+
+            try? booksRepo.touch(bookId: book.id, at: Int(now))
+        } catch {
+            log?.append("保存位置失败：\(error.localizedDescription)")
+        }
     }
 
     func finishSession() {

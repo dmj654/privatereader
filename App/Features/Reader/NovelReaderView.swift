@@ -27,6 +27,7 @@ struct NovelReaderView: View {
     @StateObject private var prefs = ReaderPreferences()
     @EnvironmentObject private var env: AppEnvironment
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var sheet: ReaderSheet?
     @State private var pending: PendingFeature?
@@ -45,7 +46,8 @@ struct NovelReaderView: View {
             progressRepo: env.progress,
             bookmarkRepo: env.bookmarks,
             booksRepo: env.books,
-            initialChapter: initialChapter
+            initialChapter: initialChapter,
+            log: env.importLog
         ))
     }
 
@@ -77,6 +79,10 @@ struct NovelReaderView: View {
         .navigationBarHidden(true)
         .preferredColorScheme(model.theme.chromeStyle)
         .onAppear { model.load() }
+        // 切后台也落一次盘：用户常常按 Home 键离开，而不是点返回。
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { model.persistProgress(force: true) }
+        }
         .onDisappear {
             model.finishSession()
             if let seconds = model.pendingSessionDuration {
@@ -288,7 +294,7 @@ struct NovelReaderView: View {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
                 guard !model.isMenuVisible, !editingZones else { return }
-                guard prefs.pageTurn == .follow else { return }
+                guard prefs.pageTurn == .follow || prefs.pageTurn == .slide else { return }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
 
                 let width = value.translation.width
@@ -318,9 +324,16 @@ struct NovelReaderView: View {
                 }
 
                 let direction = width < 0 ? 1 : -1
-                guard model.canTurn(by: direction), incomingText != nil else {
+                guard model.canTurn(by: direction) else {
                     snapBack()
                     return
+                }
+                // 只有平移/跟手需要预渲染的下一页；无动画与淡入淡出直接走 commitSwipe
+                if prefs.pageTurn == .slide || prefs.pageTurn == .follow {
+                    guard incomingText != nil else {
+                        snapBack()
+                        return
+                    }
                 }
 
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -476,7 +489,10 @@ struct NovelReaderView: View {
 
     private var sideButtons: some View {
         VStack(spacing: 11) {
-            sideButton("bookmark") { model.addBookmark() }
+            sideButton("bookmark") {
+                model.addBookmark()
+                Haptics.impact(.light)
+            }
             sideButton("magnifyingglass") {
                 pending = PendingFeature(
                     title: "全书搜索还没接上",

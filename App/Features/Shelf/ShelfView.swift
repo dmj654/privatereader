@@ -431,6 +431,7 @@ struct ShelfView: View {
                         .contentShape(Rectangle())
                         .onTapGesture { open(book) }
                         .onLongPressGesture(minimumDuration: 0.35) {
+                            Haptics.impact(.medium)
                             presentation = .bookActions(book)
                         }
                         .accessibilityAddTraits(.isButton)
@@ -496,6 +497,7 @@ struct ShelfView: View {
                 importError = "没有产生任何导入结果，请查看导入日志。"
                 presentation = .report(result)
             } else {
+                if result.failureCount == 0 { Haptics.success() }
                 lastReport = result
             }
         }
