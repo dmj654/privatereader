@@ -27,7 +27,7 @@ final class BatteryMonitor: ObservableObject {
 
     deinit {
         let center = NotificationCenter.default
-        tokens.forEach(center.removeObserver)
+        tokens.forEach { center.removeObserver($0) }
     }
 
     private func update() {
