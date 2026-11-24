@@ -41,9 +41,14 @@ struct NovelReaderView: View {
     @State private var scrubValue: Double?
     @State private var editingZones = false
     @StateObject private var speech = SpeechEngine()
+    @StateObject private var battery = BatteryMonitor()
     @State private var sleepMinutes: Int?
     @State private var sleepWorkItem: DispatchWorkItem?
     @State private var showingTimerMenu = false
+
+    /// 右边缘右滑退出：整页跟手位移，松手过了阈值就关掉阅读器。
+    @State private var exitOffset: CGFloat = 0
+    @State private var isEdgeExit = false
 
     init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
         _model = StateObject(wrappedValue: NovelReaderViewModel(
@@ -84,7 +89,11 @@ struct NovelReaderView: View {
         }
         .navigationBarHidden(true)
         .preferredColorScheme(model.theme.chromeStyle)
-        .onAppear { model.load() }
+        .onAppear {
+            // 先接偏好再加载：分页要用上次的字号，否则第一屏会按默认排版闪一下再重排。
+            model.attach(preferences: prefs)
+            model.load()
+        }
         // 切后台也落一次盘：用户常常按 Home 键离开，而不是点返回。
         .onChange(of: scenePhase) { phase in
             if phase != .active { model.persistProgress(force: true) }
@@ -108,7 +117,11 @@ struct NovelReaderView: View {
                     currentIndex: model.chapterIndex,
                     progressPercent: model.progressPercent,
                     bookmarks: model.bookmarks,
-                    onSelect: { index in model.jump(toChapter: index) },
+                    onSelect: { index in
+                        model.jump(toChapter: index)
+                        // 正在听书时跳章，朗读必须跟着跳；否则它会继续念原来那一章。
+                        restartSpeechFromCurrentPage()
+                    },
                     onDeleteBookmark: { model.removeBookmark($0) }
                 )
                 .presentationDetents([.fraction(0.72), .large])
@@ -166,50 +179,88 @@ struct NovelReaderView: View {
     // MARK: 正文
 
     private func pageArea(size: CGSize) -> some View {
-        ZStack {
-            // 正在读的这一页
-            pageLayer(model.currentPageText)
-                .offset(x: contentOffset)
+        VStack(spacing: 0) {
+            ZStack {
+                // 只有正文参与翻页位移；信息栏在下面固定着，翻页时一动不动。
+                ZStack {
+                    // 正在读的这一页
+                    pageLayer(model.currentPageText)
+                        .offset(x: contentOffset)
 
-            // 下一页提前画好，跟着一起动，中间不会露白
-            if let incoming = incomingText {
-                pageLayer(incoming)
-                    .offset(x: contentOffset + CGFloat(incomingDirection) * max(viewWidth, 1))
+                    // 下一页提前画好，跟着一起动，中间不会露白
+                    if let incoming = incomingText {
+                        pageLayer(incoming)
+                            .offset(x: contentOffset + CGFloat(incomingDirection) * max(viewWidth, 1))
+                    }
+                }
+                .opacity(contentOpacity)
+                .offset(x: exitOffset)
+
+                // 点击区固定在屏幕上，不跟着退出动画走
+                tapGrid
             }
+            .simultaneousGesture(swipeGesture)
+            .onChange(of: model.style) { _ in model.repaginate() }
+
+            infoBar
         }
-        .opacity(contentOpacity)
-        .overlay {
-            tapGrid
-        }
-        .simultaneousGesture(swipeGesture)
-        .onChange(of: model.style) { _ in model.repaginate() }
     }
 
     private func pageLayer(_ text: NSAttributedString) -> some View {
-        VStack(spacing: 0) {
-            GeometryReader { content in
-                ReaderTextView(
-                    attributedText: text,
-                    background: UIColor(model.theme.background)
-                )
-                .padding(.horizontal, model.style.marginHorizontal)
-                .padding(.top, model.style.marginTop)
-                .onAppear { model.repaginateIfNeeded(size: pageInnerSize(content.size)) }
-                .onChange(of: content.size) { newValue in
-                    model.repaginateIfNeeded(size: pageInnerSize(newValue))
-                }
-            }
-
-            HStack {
-                Text("第 \(model.chapterIndex + 1) 章")
-                Spacer()
-                Text("\(model.displayPage) / \(model.pageCount)")
-            }
-            .font(.system(size: 10))
-            .foregroundStyle(model.theme.textColor.opacity(0.45))
+        GeometryReader { content in
+            ReaderTextView(
+                attributedText: text,
+                background: UIColor(model.theme.background)
+            )
             .padding(.horizontal, model.style.marginHorizontal)
-            .padding(.bottom, 8)
+            .padding(.top, model.style.marginTop)
+            .onAppear { model.repaginateIfNeeded(size: pageInnerSize(content.size)) }
+            .onChange(of: content.size) { newValue in
+                model.repaginateIfNeeded(size: pageInnerSize(newValue))
+            }
         }
+    }
+
+    /// 固定在底部的信息栏：左上是书名，书名下面是电量，中间章号，右侧页码。
+    /// 三个位置宽度都写死，翻页只换数字，不会因为「第 9 页」变「第 10 页」就整排挪一下。
+    private var infoBar: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.book.title)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(model.theme.textColor.opacity(0.58))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                HStack(spacing: 3) {
+                    Image(systemName: battery.symbolName)
+                        .font(.system(size: 9))
+                    Text(battery.percentText)
+                        .font(.system(size: 9.5))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(battery.isLow
+                                 ? Color(hex: 0xC65B4E)
+                                 : model.theme.textColor.opacity(0.42))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("第 \(model.chapterIndex + 1) 章")
+                .font(.system(size: 10))
+                .foregroundStyle(model.theme.textColor.opacity(0.42))
+                .lineLimit(1)
+                .frame(width: 78)
+
+            Text("\(model.displayPage) / \(model.pageCount)")
+                .font(.system(size: 10))
+                .monospacedDigit()
+                .foregroundStyle(model.theme.textColor.opacity(0.42))
+                .frame(width: 58, alignment: .trailing)
+        }
+        .padding(.horizontal, model.style.marginHorizontal)
+        .padding(.top, 2)
+        .padding(.bottom, 5)
+        .frame(height: 32)
     }
 
     private func pageInnerSize(_ size: CGSize) -> CGSize {
@@ -286,7 +337,7 @@ struct NovelReaderView: View {
     /// 上一版是「旧页滑走 → 停顿 → 新页进来」，中间必然露一段白，那张截图就是这么来的。
     private func slideTurn(_ direction: Int) {
         guard let next = model.pageText(offset: direction) else {
-            // 本章没有相邻页（章节边界），退化成淡入淡出，至少不会露白
+            // 全书第一页往前 / 最后一页往后：没有相邻页可画，退化成淡入淡出
             crossFade(direction)
             return
         }
@@ -309,15 +360,27 @@ struct NovelReaderView: View {
     }
 
     private func snapBack() {
-        withAnimation(.easeOut(duration: 0.2)) { contentOffset = 0 }
+        withAnimation(.easeOut(duration: 0.2)) {
+            contentOffset = 0
+            exitOffset = 0
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { incomingText = nil }
     }
 
     /// 跟手滑动：拖动时两页一起走，松手按位移决定落地还是弹回。
+    /// 右边缘往里滑交给退出：这是手机上一个很顺手的动作，翻页手势不该把它吃掉。
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
                 guard !model.isMenuVisible, !editingZones else { return }
+
+                // 先判退出，再判翻页。否则默认「平移」模式下边缘右滑会被当成上一页。
+                if isEdgeExit || startsAtRightEdge(value) {
+                    isEdgeExit = true
+                    exitOffset = max(0, min(value.translation.width, max(viewWidth, 1)))
+                    return
+                }
+
                 guard prefs.pageTurn == .follow || prefs.pageTurn == .slide else { return }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
 
@@ -337,6 +400,11 @@ struct NovelReaderView: View {
                 }
             }
             .onEnded { value in
+                if isEdgeExit {
+                    finishEdgeExit(value)
+                    return
+                }
+
                 guard !model.isMenuVisible, !editingZones else {
                     snapBack()
                     return
@@ -352,12 +420,24 @@ struct NovelReaderView: View {
                     snapBack()
                     return
                 }
-                // 只有平移/跟手需要预渲染的下一页；无动画与淡入淡出直接走 commitSwipe
-                if prefs.pageTurn == .slide || prefs.pageTurn == .follow {
-                    guard incomingText != nil else {
-                        snapBack()
-                        return
-                    }
+
+                // 无动画与淡入淡出本来就没有"下一页"可预渲染，硬走滑动会露白。
+                // 交给各自的翻页实现，滑动只负责识别方向。
+                if prefs.pageTurn == .none {
+                    contentOffset = 0
+                    model.turnPage(by: direction)
+                    followSpeechAfterManualMove()
+                    return
+                }
+                if prefs.pageTurn == .fade {
+                    contentOffset = 0
+                    crossFade(direction)
+                    return
+                }
+
+                guard incomingText != nil else {
+                    snapBack()
+                    return
                 }
 
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -370,6 +450,37 @@ struct NovelReaderView: View {
                     followSpeechAfterManualMove()
                 }
             }
+    }
+
+    /// 起点在屏幕最右侧 28pt 内、向右拖，才算退出。
+    private func startsAtRightEdge(_ value: DragGesture.Value) -> Bool {
+        value.startLocation.x > viewWidth - 28
+            && value.translation.width > 6
+            && abs(value.translation.width) > abs(value.translation.height)
+    }
+
+    private func finishEdgeExit(_ value: DragGesture.Value) {
+        isEdgeExit = false
+        let distance = value.translation.width
+        let projected = value.predictedEndTranslation.width
+        let shouldClose = distance > 96 || (distance > 40 && projected > 200)
+
+        if shouldClose {
+            withAnimation(.easeOut(duration: 0.18)) {
+                exitOffset = max(viewWidth, 1)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                closeReader()
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.22)) { exitOffset = 0 }
+        }
+    }
+
+    /// 关阅读器前先把声音停干净。只 dismiss 不 stop，排队中的回调会把下一章念出来。
+    private func closeReader() {
+        stopSpeech()
+        dismiss()
     }
 
     // MARK: 区域编辑
@@ -483,11 +594,15 @@ struct NovelReaderView: View {
     }
 
     /// 一句念完后自动接下一句；本章念完自动接下一章；全书念完就停。
+    ///
+    /// 所有回调都对 engine / viewModel 弱引用：闭包挂在 engine 自己身上，
+    /// 强引用会形成自循环，阅读器关掉后 SpeechEngine 还活着，声音就一直停不下来。
     private func wireSpeechCallbacks() {
         let engine = speech
         let viewModel = model
 
-        engine.onFinishUtterance = {
+        engine.onFinishUtterance = { [weak engine, weak viewModel] in
+            guard let engine, let viewModel else { return }
             if let next = viewModel.advanceSpeechText() {
                 engine.updateMetadata(title: viewModel.book.title, subtitle: viewModel.chapterTitle)
                 engine.speak(next)
@@ -499,14 +614,17 @@ struct NovelReaderView: View {
                 viewModel.endSpeech()
             }
         }
-        engine.onRemotePlay = {
+        engine.onRemotePlay = { [weak engine] in
+            guard let engine else { return }
             if engine.isPaused { engine.resume() }
         }
-        engine.onRemotePause = { engine.pause() }
-        engine.onRemoteNext = {
+        engine.onRemotePause = { [weak engine] in engine?.pause() }
+        engine.onRemoteNext = { [weak engine, weak viewModel] in
+            guard let engine, let viewModel else { return }
             if let next = viewModel.advanceSpeechText() { engine.speak(next) }
         }
-        engine.onRemotePrevious = {
+        engine.onRemotePrevious = { [weak engine, weak viewModel] in
+            guard let engine, let viewModel else { return }
             if let text = viewModel.rewindSpeechText() { engine.speak(text) }
         }
     }
@@ -611,7 +729,7 @@ struct NovelReaderView: View {
 
     private var topBar: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button { closeReader() } label: {
                 Image(systemName: "chevron.left")
                     .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(Palette.ink2)

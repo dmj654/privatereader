@@ -35,7 +35,10 @@ public enum ReaderFontFamily: String, CaseIterable, Codable, Sendable {
 }
 
 /// 排版参数 → 富文本属性。用 CTFont 而非 UIFont，保持跨平台可测。
-public struct ReaderStyle: Hashable, Sendable {
+///
+/// 必须 Codable：这些参数要跨启动保存。以前只存在 ViewModel 的内存里，
+/// 退出阅读器就回默认值，用户每次进来都得重调一遍。
+public struct ReaderStyle: Hashable, Sendable, Codable {
     public var fontSize: Double
     public var lineHeightMultiple: Double
     public var paragraphSpacing: Double
@@ -68,6 +71,40 @@ public struct ReaderStyle: Hashable, Sendable {
     }
 
     public static let `default` = ReaderStyle()
+
+    // 手写 Codable：缺字段补默认值，而不是整份设置解码失败退回默认。
+    // 这样以后加参数（比如新的字重、段首间距）时，老用户已存的设置不会一次性丢光。
+    private enum CodingKeys: String, CodingKey {
+        case fontSize, lineHeightMultiple, paragraphSpacing, letterSpacing
+        case marginHorizontal, marginTop, fontFamily, indentFirstLine, justified
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let fallback = ReaderStyle()
+        fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? fallback.fontSize
+        lineHeightMultiple = try c.decodeIfPresent(Double.self, forKey: .lineHeightMultiple) ?? fallback.lineHeightMultiple
+        paragraphSpacing = try c.decodeIfPresent(Double.self, forKey: .paragraphSpacing) ?? fallback.paragraphSpacing
+        letterSpacing = try c.decodeIfPresent(Double.self, forKey: .letterSpacing) ?? fallback.letterSpacing
+        marginHorizontal = try c.decodeIfPresent(Double.self, forKey: .marginHorizontal) ?? fallback.marginHorizontal
+        marginTop = try c.decodeIfPresent(Double.self, forKey: .marginTop) ?? fallback.marginTop
+        fontFamily = (try? c.decodeIfPresent(ReaderFontFamily.self, forKey: .fontFamily)) ?? fallback.fontFamily
+        indentFirstLine = try c.decodeIfPresent(Bool.self, forKey: .indentFirstLine) ?? fallback.indentFirstLine
+        justified = try c.decodeIfPresent(Bool.self, forKey: .justified) ?? fallback.justified
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(fontSize, forKey: .fontSize)
+        try c.encode(lineHeightMultiple, forKey: .lineHeightMultiple)
+        try c.encode(paragraphSpacing, forKey: .paragraphSpacing)
+        try c.encode(letterSpacing, forKey: .letterSpacing)
+        try c.encode(marginHorizontal, forKey: .marginHorizontal)
+        try c.encode(marginTop, forKey: .marginTop)
+        try c.encode(fontFamily, forKey: .fontFamily)
+        try c.encode(indentFirstLine, forKey: .indentFirstLine)
+        try c.encode(justified, forKey: .justified)
+    }
 
     /// 首行缩进宽度：两个字。
     public var indentWidth: Double {

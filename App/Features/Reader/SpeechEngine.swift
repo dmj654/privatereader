@@ -21,9 +21,27 @@ final class SpeechEngine: NSObject, ObservableObject {
 
     private let synthesizer = AVSpeechSynthesizer()
 
+    /// 存储键。语速与音色是"这个人耳朵的习惯"，必须跨启动记住。
+    private enum Key {
+        static let rate = "speech.rate"
+        static let voice = "speech.voiceIdentifier"
+    }
+
     /// 语速，0.4–0.7 之间比较适合中文。默认比系统默认稍慢一点。
-    @Published var rate: Float = AVSpeechUtteranceDefaultSpeechRate * 0.94
-    @Published var voiceIdentifier: String?
+    /// didSet 直接落盘，滑块每动一格都记住。
+    @Published var rate: Float = SpeechEngine.storedRate() {
+        didSet { UserDefaults.standard.set(rate, forKey: Key.rate) }
+    }
+
+    @Published var voiceIdentifier: String? = UserDefaults.standard.string(forKey: Key.voice) {
+        didSet { UserDefaults.standard.set(voiceIdentifier, forKey: Key.voice) }
+    }
+
+    /// 当前是否处于"用户希望它读"的状态。
+    ///
+    /// 这不是 `isSpeaking`：`stopSpeaking` 之后的 `didFinish` 回调可能已经排在主队列上，
+    /// 只靠 `isSpeaking` 判断，回调仍会去拿下一章然后重新开口——"退出到书架还在读"就是这么来的。
+    private var isPlaybackRequested = false
 
     override init() {
         super.init()
@@ -32,11 +50,20 @@ final class SpeechEngine: NSObject, ObservableObject {
         configureRemoteCommands()
     }
 
+    private static func storedRate() -> Float {
+        let fallback = AVSpeechUtteranceDefaultSpeechRate * 0.94
+        let stored = UserDefaults.standard.float(forKey: Key.rate)
+        guard stored > 0 else { return fallback }
+        return min(max(stored, 0.3), 0.75)
+    }
+
     // MARK: 播放控制
 
     func speak(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        isPlaybackRequested = true
 
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
@@ -76,6 +103,9 @@ final class SpeechEngine: NSObject, ObservableObject {
     }
 
     func stop() {
+        // 先关掉"应该继续读"的开关，再停声音。顺序反了的话，
+        // 排队中的 didFinish 会看到开关还开着，接着去念下一章。
+        isPlaybackRequested = false
         synthesizer.stopSpeaking(at: .immediate)
         isSpeaking = false
         isPaused = false
@@ -186,6 +216,9 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
             self.isSpeaking = false
+            // 已经 stop 过就不要再接下一句。退出阅读器时最怕这个：
+            // 用户已经回到书架，声音却从下一章重新冒出来。
+            guard self.isPlaybackRequested else { return }
             self.onFinishUtterance?()
         }
     }

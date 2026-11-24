@@ -34,13 +34,23 @@ final class NovelReaderViewModel: ObservableObject {
     @Published var chapterIndex: Int = 0
     @Published var pageIndex: Int = 0
     @Published private(set) var pageRanges: [NSRange] = []
-    @Published var style: ReaderStyle = .default
-    @Published var theme: ReaderTheme = .day
+
+    /// 排版与主题：改了立刻写回偏好，下次打开还是这一套。
+    @Published var style: ReaderStyle = .default {
+        didSet { preferences?.style = style }
+    }
+    @Published var theme: ReaderTheme = .day {
+        didSet { preferences?.theme = theme }
+    }
+
     @Published var isLoading = true
     @Published var errorMessage: String?
     @Published var bookmarks: [Bookmark] = []
     @Published var isMenuVisible = false
     @Published var isDarkChrome = false
+
+    /// 偏好只在阅读器活着时有意义，用 weak 防止它反向延长偏好对象的生命周期。
+    private weak var preferences: ReaderPreferences?
 
     private var lastPageSize: CGSize = .zero
     private var lastSavedAt: TimeInterval = 0
@@ -83,6 +93,14 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     // MARK: 加载
+
+    /// 接上偏好：把上次的字号、行距、主题拿进来，并让之后的修改自动写回。
+    /// 必须在 `load()` 之前调用——分页要用正确的排版参数，否则第一屏会按默认字号排一次再重排。
+    func attach(preferences: ReaderPreferences) {
+        self.preferences = preferences
+        if style != preferences.style { style = preferences.style }
+        if theme != preferences.theme { theme = preferences.theme }
+    }
 
     func load() {
         isLoading = true
@@ -236,15 +254,30 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     /// 取相邻页的富文本，给翻页动画用：新页要提前画出来，才能和旧页同时在场。
-    /// 只在本章内可用；跨章返回 nil，调用方退化成淡入淡出。
+    ///
+    /// 以前跨章返回 nil，调用方就 `snapBack()` —— 于是「本章最后一页」往左滑永远弹回去，
+    /// 进不了下一章。现在跨章时把相邻章的首/尾页也排出来，动画照常推进，
+    /// 动画结束后再真正换章。
     func pageText(offset: Int) -> NSAttributedString? {
-        guard let chapter = currentChapter else { return nil }
         let target = pageIndex + offset
-        guard pageRanges.indices.contains(target) else { return nil }
 
-        let attributed = attributedBody(for: chapter)
-        let range = pageRanges[target]
-        guard range.location + range.length <= attributed.length else { return nil }
+        if pageRanges.indices.contains(target) {
+            guard let attributed = chapterAttributed() else { return nil }
+            return slice(attributed, pageRanges[target])
+        }
+
+        let neighbor = chapterIndex + (offset > 0 ? 1 : -1)
+        guard chapters.indices.contains(neighbor), lastPageSize.width > 40 else { return nil }
+
+        let attributed = attributedBody(for: chapters[neighbor])
+        let ranges = Paginator.pageRanges(attributedString: attributed, pageSize: lastPageSize)
+        guard let range = offset > 0 ? ranges.first : ranges.last else { return nil }
+        return slice(attributed, range)
+    }
+
+    private func slice(_ attributed: NSAttributedString, _ range: NSRange) -> NSAttributedString? {
+        guard range.location >= 0,
+              range.location + range.length <= attributed.length else { return nil }
         return attributed.attributedSubstring(from: range)
     }
 
@@ -355,8 +388,14 @@ final class NovelReaderViewModel: ObservableObject {
 
         var start = 0
         if startAtCurrentPage, pageRanges.indices.contains(pageIndex) {
-            start = SpeechQueue(sentences: speechSentences)
-                .index(containing: pageRanges[pageIndex].location) ?? 0
+            // 章标题排在正文前面，但它不是正文。从章首开始听时跳过标题，
+            // 否则"那一页的第一句"（正文第一句）会被标题顶掉。
+            let titleLength = (currentChapter?.title as NSString?)?.length ?? 0
+            start = SpeechStartLocator.startIndex(
+                sentences: speechSentences,
+                pageLocation: pageRanges[pageIndex].location,
+                titleLength: titleLength
+            )
         }
 
         speechQueue = SpeechQueue(sentences: speechSentences, index: start)
@@ -388,6 +427,9 @@ final class NovelReaderViewModel: ObservableObject {
 
     /// 本章念完，接着念下一章。返回下一章第一句的文本。
     func beginNextChapterForSpeech() -> String? {
+        // 朗读已经被结束（退出阅读器、点了退出、定时到点）就别再跳章开念。
+        // 之前这里只看章节边界，于是 stop 之后排队到来的 didFinish 会把下一章念起来。
+        guard speechQueue != nil else { return nil }
         guard chapterIndex + 1 < chapters.count else { return nil }
 
         chapterIndex += 1

@@ -145,6 +145,9 @@ struct TapZoneConfig: Codable, Equatable {
 // MARK: - 持久化
 
 /// 阅读器的交互偏好。放 UserDefaults，不进数据库——它不是书的内容，重装也愿意重设。
+///
+/// 这里必须包含**所有**会在阅读器里被调、并且下次进来还应当保持的东西：
+/// 翻页动画、九宫格、排版参数、背景主题。少存一样，用户就要每天重调一遍。
 final class ReaderPreferences: ObservableObject {
     private static let keyV2 = "reader.preferences.v2"
     private static let keyV1 = "reader.preferences.v1"
@@ -152,6 +155,8 @@ final class ReaderPreferences: ObservableObject {
     private struct Snapshot: Codable {
         var pageTurn: PageTurnMode
         var zones: TapZoneConfig
+        var style: ReaderStyle?
+        var theme: ReaderTheme?
     }
 
     /// 第一版的旧结构：三个横向大区。用来做一次迁移。
@@ -173,11 +178,23 @@ final class ReaderPreferences: ObservableObject {
         didSet { persist() }
     }
 
+    /// 字号、行距、字间距、段间距、页边距、字体、缩进、对齐。
+    @Published var style: ReaderStyle {
+        didSet { persist() }
+    }
+
+    /// 背景主题（日间/护眼/夜间/纯黑）。
+    @Published var theme: ReaderTheme {
+        didSet { persist() }
+    }
+
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.keyV2),
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data) {
             pageTurn = snapshot.pageTurn
             zones = snapshot.zones
+            style = snapshot.style ?? .default
+            theme = snapshot.theme ?? .day
             return
         }
 
@@ -193,16 +210,20 @@ final class ReaderPreferences: ObservableObject {
                 }
             }
             zones = migrated
+            style = .default
+            theme = .day
             persist()
             return
         }
 
         pageTurn = .slide
         zones = TapZoneConfig()
+        style = .default
+        theme = .day
     }
 
     private func persist() {
-        let snapshot = Snapshot(pageTurn: pageTurn, zones: zones)
+        let snapshot = Snapshot(pageTurn: pageTurn, zones: zones, style: style, theme: theme)
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         UserDefaults.standard.set(data, forKey: Self.keyV2)
     }

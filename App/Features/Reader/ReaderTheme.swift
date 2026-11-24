@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum ReaderTheme: String, CaseIterable, Identifiable {
+enum ReaderTheme: String, CaseIterable, Identifiable, Codable {
     case day, eyeCare, night, black
 
     var id: String { rawValue }

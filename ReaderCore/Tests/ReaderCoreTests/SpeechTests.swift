@@ -138,3 +138,86 @@ final class SpeechQueueTests: XCTestCase {
         XCTAssertNil(mutable.current)
     }
 }
+
+final class SpeechStartLocatorTests: XCTestCase {
+    /// 模拟真实章节：标题 + 换行 + 正文。位置与 attributedBody 的构造完全一致。
+    private func chapter(title: String, body: String) -> (sentences: [SpeechSentence], titleLength: Int) {
+        let full = title + "\n" + body
+        return (SentenceSplitter.split(full), (title as NSString).length)
+    }
+
+    func testSkipsChapterTitleWhenStartingFromChapterHead() {
+        let (sentences, titleLength) = chapter(
+            title: "第七章 雨夜",
+            body: "他推开门。风灌了进来。"
+        )
+        // 第 0 句是标题，第 1 句才是正文第一句
+        XCTAssertEqual(sentences[0].text, "第七章 雨夜")
+
+        let start = SpeechStartLocator.startIndex(
+            sentences: sentences,
+            pageLocation: 0,
+            titleLength: titleLength
+        )
+        XCTAssertEqual(sentences[start].text, "他推开门。", "跳章后应当从正文第一句念，而不是念标题")
+    }
+
+    func testLongTitleSplitIntoMultipleSentencesIsFullySkipped() {
+        let (sentences, titleLength) = chapter(
+            title: "第一章 开始。然后结束。",
+            body: "正文来了。"
+        )
+        let start = SpeechStartLocator.startIndex(
+            sentences: sentences,
+            pageLocation: 0,
+            titleLength: titleLength
+        )
+        XCTAssertEqual(sentences[start].text, "正文来了。", "标题里带句号被切成多句时也要跳干净")
+    }
+
+    func testMidChapterPageStartsAtContainingSentence() {
+        let (sentences, titleLength) = chapter(
+            title: "第七章 雨夜",
+            body: "他推开门。风灌了进来。雨很大。"
+        )
+        let target = sentences.first { $0.text == "风灌了进来。" }!
+        let start = SpeechStartLocator.startIndex(
+            sentences: sentences,
+            pageLocation: target.location + 2, // 落在这句中间
+            titleLength: titleLength
+        )
+        XCTAssertEqual(sentences[start].text, "风灌了进来。")
+    }
+
+    func testPageLocationInWhitespacePicksNextSentence() {
+        let sentences = [
+            SpeechSentence(text: "上一句。", location: 0, length: 4),
+            SpeechSentence(text: "下一句。", location: 6, length: 4)
+        ]
+        let start = SpeechStartLocator.startIndex(
+            sentences: sentences,
+            pageLocation: 5,
+            titleLength: 0
+        )
+        XCTAssertEqual(sentences[start].text, "下一句。", "页首落在空白处时应从下一句开始，不重复上一页")
+    }
+
+    func testNoTitleStillWorks() {
+        let sentences = [
+            SpeechSentence(text: "第一句。", location: 0, length: 4),
+            SpeechSentence(text: "第二句。", location: 4, length: 4)
+        ]
+        let start = SpeechStartLocator.startIndex(sentences: sentences, pageLocation: 0, titleLength: 0)
+        XCTAssertEqual(start, 0)
+    }
+
+    func testTitleOnlyChapterDoesNotCrash() {
+        let sentences = [SpeechSentence(text: "只有标题", location: 0, length: 4)]
+        let start = SpeechStartLocator.startIndex(sentences: sentences, pageLocation: 0, titleLength: 4)
+        XCTAssertEqual(start, 0, "整章只有标题时不能越界，退回最后一句")
+    }
+
+    func testEmptySentencesReturnsZero() {
+        XCTAssertEqual(SpeechStartLocator.startIndex(sentences: [], pageLocation: 0, titleLength: 0), 0)
+    }
+}
