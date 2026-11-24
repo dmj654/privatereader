@@ -7,3 +7,6 @@ DerivedData/
 *.xcworkspace/
 xcuserdata/
 *.ipa
+dist/
+*.xcarchive
+PkgInfo

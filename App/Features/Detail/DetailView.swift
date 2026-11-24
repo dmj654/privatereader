@@ -9,6 +9,7 @@ struct DetailView: View {
     @State private var progress: ReadingProgress?
     @State private var showDeleteConfirm = false
     @State private var showReader = false
+    @State private var showComicNotice = false
 
     var body: some View {
         ZStack {
@@ -27,6 +28,11 @@ struct DetailView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .task { progress = try? env.progress.fetch(bookId: book.id) }
+        .alert("漫画阅读器还没接上", isPresented: $showComicNotice) {
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text("这一版能导入漫画、在书架里看到它，但单页 / 条漫阅读器要到下一阶段才有。小说现在就能读。")
+        }
         .fullScreenCover(isPresented: $showReader) {
             NovelReaderView(book: book, env: env)
                 .environmentObject(env)
@@ -91,7 +97,11 @@ struct DetailView: View {
     private var actions: some View {
         HStack(spacing: 10) {
             Button {
-                showReader = true
+                if book.type == .novel {
+                    showReader = true
+                } else {
+                    showComicNotice = true
+                }
             } label: {
                 Text(primaryTitle)
             }
@@ -133,6 +143,9 @@ struct DetailView: View {
     }
 
     private var primaryTitle: String {
+        if book.type == .comic {
+            return "漫画阅读器待接入"
+        }
         guard let progress, progress.chapterIndex > 0 else { return "开始阅读" }
         return "继续阅读 · 第 \(progress.chapterIndex + 1) 章"
     }
