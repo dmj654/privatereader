@@ -578,7 +578,7 @@ ViewModel 按偏移把第一句截断，从页首这半句开口；
 ### 测试
 新增 `OnlineLibrary` 8、`OnlineBookService` 6、`OnlineReadingService` 7、`UpdateChecker` 6、
 `ComicPageStore` 8、`StatsService` 5、`StorageService` 5、`BackupService` 6。
-CI 全绿（247+ 条，App 编译通过）。
+CI 全绿（251 条测试，0 失败，App 编译通过）。
 
 
 ## 待真机验证（统一收集，等这一版装上去一起过）
