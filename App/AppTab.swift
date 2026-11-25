@@ -23,3 +23,11 @@ enum AppTab: String, CaseIterable, Identifiable {
         }
     }
 }
+
+
+/// 让任意页面都能切 Tab（首页空状态的两个引导按钮、发现页的「去搜索」）。
+/// 单独抽一个对象，避免把 Binding 一层层往下传。
+@MainActor
+final class TabRouter: ObservableObject {
+    @Published var selection: AppTab = .home
+}

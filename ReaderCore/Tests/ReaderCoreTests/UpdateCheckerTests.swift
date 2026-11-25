@@ -43,7 +43,10 @@ final class UpdateCheckerTests: XCTestCase {
         online = OnlineReadingService(library: library, sources: sources, client: client)
         checker = UpdateChecker(online: online, books: books)
 
-        StaticURLProtocol.routes = ["/book/1/toc": (200, Data(tocHTML(count: 3).utf8), "text/html")]
+        StaticURLProtocol.routes = [
+            "/book/1": (200, Data("<a class=\"toc-link\" href=\"/book/1/toc\">目录</a>".utf8), "text/html"),
+            "/book/1/toc": (200, Data(tocHTML(count: 3).utf8), "text/html")
+        ]
     }
 
     override func tearDownWithError() throws {

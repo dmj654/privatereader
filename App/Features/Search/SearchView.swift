@@ -4,7 +4,7 @@ import ReaderCore
 struct SearchView: View {
     @EnvironmentObject private var env: AppEnvironment
     @StateObject private var model = SearchViewModel()
-    @State private var keyboardFocus = false
+    @FocusState private var keyboardFocus: Bool
 
     var body: some View {
         ZStack {

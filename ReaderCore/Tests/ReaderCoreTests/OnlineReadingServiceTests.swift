@@ -41,6 +41,7 @@ final class OnlineReadingServiceTests: XCTestCase {
         service = OnlineReadingService(library: library, sources: sources, client: client)
 
         StaticURLProtocol.routes = [
+            "/book/1": (200, Data("<a class=\"toc-link\" href=\"/book/1/toc\">目录</a>".utf8), "text/html"),
             "/c/0": (200, Data("<div id=\"content\">第零章正文</div>".utf8), "text/html"),
             "/c/1": (200, Data("<div id=\"content\">第一章正文</div>".utf8), "text/html"),
             "/c/2": (200, Data("<div id=\"content\">第二章正文</div>".utf8), "text/html"),

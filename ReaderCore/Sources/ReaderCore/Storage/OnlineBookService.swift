@@ -102,7 +102,7 @@ public actor OnlineBookService {
         let upper = min(index + radius, manifest.chapters.count - 1)
         guard lower <= upper else { return }
 
-        for target in lower...upper where target != index {
+        for target in lower...upper {
             guard !library.hasChapter(bookId: manifest.bookId, index: target) else { continue }
             _ = try? await chapterBody(manifest: manifest, source: source, index: target)
         }

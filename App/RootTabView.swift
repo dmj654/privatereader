@@ -1,7 +1,9 @@
 import SwiftUI
 
 struct RootTabView: View {
-    @State private var selection: AppTab = .home
+    @StateObject private var router = TabRouter()
+
+    private var selection: AppTab { router.selection }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -18,9 +20,10 @@ struct RootTabView: View {
                 }
             }
 
-            GlassTabBar(selection: $selection)
+            GlassTabBar(selection: $router.selection)
         }
         .tint(Palette.accent)
+        .environmentObject(router)
     }
 
     @ViewBuilder
