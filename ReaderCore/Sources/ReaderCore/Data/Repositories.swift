@@ -181,6 +181,20 @@ public struct SourceRepository {
         }
     }
 
+    /// 返回 true 表示新增，false 表示覆盖已有。
+    @discardableResult
+    public func upsert(_ source: BookSource) throws -> Bool {
+        try db.write { db in
+            let exists = try BookSource.fetchOne(db, key: source.id) != nil
+            try source.save(db)
+            return !exists
+        }
+    }
+
+    public func fetch(id: String) throws -> BookSource? {
+        try db.read { try BookSource.fetchOne($0, key: id) }
+    }
+
     public func all() throws -> [BookSource] {
         try db.read { try BookSource.order(Column("name")).fetchAll($0) }
     }
@@ -203,6 +217,19 @@ public struct SourceRepository {
 
     public func delete(id: String) throws {
         _ = try db.write { db in try BookSource.deleteOne(db, key: id) }
+    }
+
+    public func deleteAll() throws {
+        try db.write { _ = try BookSource.deleteAll($0) }
+    }
+
+    public func markChecked(id: String, at timestamp: Int, result: String?) throws {
+        try db.write { db in
+            try db.execute(
+                sql: "UPDATE source SET lastCheckAt = ?, lastCheckResult = ? WHERE id = ?",
+                arguments: [timestamp, result, id]
+            )
+        }
     }
 }
 
