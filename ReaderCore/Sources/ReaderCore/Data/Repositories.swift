@@ -259,6 +259,25 @@ public struct SourceRepository {
         try db.write { _ = try BookSource.deleteAll($0) }
     }
 
+    /// 上次体检明确失败或超时的源。没检测过的（lastCheckResult 为空）不算。
+    public func invalidSources() throws -> [BookSource] {
+        try db.read {
+            try BookSource
+                .filter(sql: "lastCheckResult LIKE 'failed%' OR lastCheckResult = 'timeout'")
+                .order(Column("name"))
+                .fetchAll($0)
+        }
+    }
+
+    public func delete(ids: [String]) throws {
+        guard !ids.isEmpty else { return }
+        try db.write { db in
+            for id in ids {
+                _ = try BookSource.deleteOne(db, key: id)
+            }
+        }
+    }
+
     public func markChecked(id: String, at timestamp: Int, result: String?) throws {
         try db.write { db in
             try db.execute(

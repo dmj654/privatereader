@@ -5,12 +5,19 @@ import ReaderCore
 /// 榜单和分类要等源里的 exploreUrl 规则跑通再上，这里先不铺空架子。
 struct DiscoverView: View {
     @EnvironmentObject private var env: AppEnvironment
-    @EnvironmentObject private var router: TabRouter
 
     @State private var sourceCount = 0
     @State private var enabledCount = 0
     @State private var showingImport = false
     @State private var loadError: String?
+
+    @State private var invalidCount = 0
+    @State private var isChecking = false
+    @State private var checkTask: Task<Void, Never>?
+    @State private var checkedCount = 0
+    @State private var checkTotal = 0
+    @State private var confirmDeleteInvalid = false
+    @State private var maintenanceMessage: String?
 
     var body: some View {
         ZStack {
@@ -36,7 +43,7 @@ struct DiscoverView: View {
                         importGuide
                     } else {
                         sourceCard
-                        searchHint
+                        maintenanceCard
                         ExploreSection()
                     }
 
@@ -59,6 +66,11 @@ struct DiscoverView: View {
                 }
                 .accessibilityLabel("书源管理")
             }
+        }
+        .confirmationDialog("删除 \(invalidCount) 条失效书源？", isPresented: $confirmDeleteInvalid, titleVisibility: .visible) {
+            Button("删除失效源", role: .destructive) { deleteInvalid() }
+        } message: {
+            Text("只删上次测试明确失败或超时的源，正常的源不动。")
         }
         .sheet(isPresented: $showingImport) {
             SourceImportSheet { _ in reload() }
@@ -135,31 +147,64 @@ struct DiscoverView: View {
         .buttonStyle(.plain)
     }
 
-    private var searchHint: some View {
-        Button {
-            router.selection = .search
-        } label: {
-            Card {
-                HStack(spacing: 12) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 17, weight: .light))
-                        .foregroundStyle(Palette.ink2)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("去「搜索」找书")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Palette.ink)
-                        Text("搜索结果按源分组，谁先回谁先出")
-                            .font(Typo.micro)
-                            .foregroundStyle(Palette.ink3)
+    private var maintenanceCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("书源维护")
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+                Text("测试会逐个请求搜索接口，5 秒超时；测完可以一键删掉失效源。")
+                    .font(Typo.micro)
+                    .foregroundStyle(Palette.ink3)
+                    .lineSpacing(2)
+
+                HStack(spacing: 9) {
+                    Button {
+                        toggleCheck()
+                    } label: {
+                        Text(isChecking
+                             ? "停止 \(checkedCount)/\(checkTotal)"
+                             : "测试书源")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(isChecking ? Palette.danger : Palette.ink)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                            .background(Palette.surfaceAlt)
+                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .strokeBorder(Palette.lineStrong, lineWidth: 1)
+                            }
                     }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
+                    .buttonStyle(.plain)
+
+                    Button {
+                        confirmDeleteInvalid = true
+                    } label: {
+                        Text("删除失效 \(invalidCount)")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(invalidCount > 0 ? Palette.danger : Palette.ink3.opacity(0.6))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 40)
+                            .background(Palette.surfaceAlt)
+                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .strokeBorder(Palette.line, lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(invalidCount == 0 || isChecking)
+                }
+
+                if let maintenanceMessage {
+                    Text(maintenanceMessage)
+                        .font(Typo.micro)
                         .foregroundStyle(Palette.ink3)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.plain)
     }
 
     private var rulesCard: some View {
@@ -184,9 +229,95 @@ struct DiscoverView: View {
             let all = try env.sources.all()
             sourceCount = all.count
             enabledCount = all.filter(\.enabled).count
+            invalidCount = (try? env.sources.invalidSources().count) ?? 0
             loadError = nil
         } catch {
             loadError = error.localizedDescription
+        }
+    }
+
+    // MARK: 维护
+
+    private func toggleCheck() {
+        if isChecking {
+            checkTask?.cancel()
+            checkTask = nil
+            isChecking = false
+            maintenanceMessage = "已停止检测，已测结果已保存。"
+            reload()
+            return
+        }
+
+        let enabled = (try? SourceImportService(repo: env.sources).enabledSources()) ?? []
+        guard !enabled.isEmpty else {
+            maintenanceMessage = "没有启用的书源。"
+            return
+        }
+
+        isChecking = true
+        checkedCount = 0
+        checkTotal = enabled.count
+        maintenanceMessage = nil
+
+        let repo = env.sources
+        let checker = SourceHealthChecker(client: env.sourceClient)
+
+        checkTask = Task {
+            await withTaskGroup(of: (String, SourceHealthStatus).self) { group in
+                var iterator = enabled.makeIterator()
+                let width = min(8, enabled.count)
+                for _ in 0..<width {
+                    guard let source = iterator.next() else { break }
+                    group.addTask { (source.id, await checker.check(source)) }
+                }
+
+                while let (id, status) = await group.next() {
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
+                    await MainActor.run {
+                        try? repo.markChecked(
+                            id: id,
+                            at: Int(Date().timeIntervalSince1970),
+                            result: Self.checkResultText(status)
+                        )
+                        checkedCount += 1
+                    }
+                    if let source = iterator.next() {
+                        group.addTask { (source.id, await checker.check(source)) }
+                    }
+                }
+            }
+
+            await MainActor.run {
+                isChecking = false
+                checkTask = nil
+                reload()
+                if checkedCount >= checkTotal {
+                    maintenanceMessage = "检测完成：\(invalidCount) 条失效，可一键删除。"
+                }
+            }
+        }
+    }
+
+    private func deleteInvalid() {
+        let invalid = (try? env.sources.invalidSources()) ?? []
+        guard !invalid.isEmpty else {
+            maintenanceMessage = "没有可删除的失效源。"
+            return
+        }
+        try? env.sources.delete(ids: invalid.map(\.id))
+        reload()
+        maintenanceMessage = "已删除 \(invalid.count) 条失效书源。"
+    }
+
+    private static func checkResultText(_ status: SourceHealthStatus) -> String {
+        switch status {
+        case .ok(let ms, let count): return "ok \(ms)ms \(count)"
+        case .timeout: return "timeout"
+        case .failed(let message): return "failed: \(message)"
+        case .skipped(let reason): return "skipped: \(reason)"
         }
     }
 }

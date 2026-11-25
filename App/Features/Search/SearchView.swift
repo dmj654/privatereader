@@ -6,6 +6,7 @@ struct SearchView: View {
     @EnvironmentObject private var router: TabRouter
     @StateObject private var model = SearchViewModel()
     @FocusState private var keyboardFocus: Bool
+    @State private var choosing: SearchViewModel.MergedBook?
 
     var body: some View {
         ZStack {
@@ -13,15 +14,18 @@ struct SearchView: View {
 
             VStack(spacing: 0) {
                 searchBar
+                kindPicker
                 content
             }
         }
         .navigationTitle("搜索")
         .navigationBarTitleDisplayMode(.inline)
-        // 不要 onAppear 就 focus：四个 Tab 在启动时都会建出来，
-        // 隐藏的搜索页一抢焦点，进 App 就弹输入法。
         .onChange(of: router.selection) { tab in
-            keyboardFocus = (tab == .search && model.query.isEmpty && model.groups.isEmpty)
+            keyboardFocus = (tab == .search && model.query.isEmpty && model.books.isEmpty)
+        }
+        .sheet(item: $choosing) { book in
+            SourceChooserSheet(book: book)
+                .presentationDetents([.medium, .large])
         }
     }
 
@@ -75,24 +79,53 @@ struct SearchView: View {
             .disabled(model.query.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, Spacing.l)
-        .padding(.vertical, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+    }
+
+    private var kindPicker: some View {
+        HStack(spacing: 0) {
+            ForEach(SearchViewModel.Kind.allCases) { kind in
+                Button {
+                    keyboardFocus = false
+                    model.setKind(kind, env: env)
+                } label: {
+                    Text(kind.title)
+                        .font(.system(size: 13, weight: model.kind == kind ? .semibold : .regular))
+                        .foregroundStyle(model.kind == kind ? Color.white : Palette.ink2)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 30)
+                        .background(model.kind == kind ? Palette.accent : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Palette.line, lineWidth: 1)
+        }
+        .padding(.horizontal, Spacing.l)
+        .padding(.bottom, 8)
     }
 
     // MARK: 内容
 
     @ViewBuilder
     private var content: some View {
-        if let message = model.errorMessage {
+        if let message = model.errorMessage, model.books.isEmpty {
             ScrollView {
                 EmptyStateView(symbol: "antenna.radiowaves.left.and.right.slash",
                                title: "暂时搜不了",
                                message: message)
                 if !model.history.isEmpty {
-                    historySection
-                        .padding(.horizontal, Spacing.l)
+                    historySection.padding(.horizontal, Spacing.l)
                 }
             }
-        } else if model.groups.isEmpty && model.localMatches.isEmpty {
+        } else if model.books.isEmpty && !model.isSearching {
             ScrollView {
                 historySection
                     .padding(.horizontal, Spacing.l)
@@ -100,18 +133,104 @@ struct SearchView: View {
             }
         } else {
             ScrollView {
-                LazyVStack(spacing: 14) {
-                    if !model.localMatches.isEmpty {
-                        localSection
-                    }
-                    ForEach(model.groups) { group in
-                        groupSection(group)
+                LazyVStack(spacing: 9) {
+                    ForEach(model.books) { book in
+                        Button {
+                            choosing = book
+                        } label: {
+                            bookRow(book)
+                        }
+                        .buttonStyle(.plain)
                     }
                     footer
                 }
                 .padding(.horizontal, Spacing.l)
                 .padding(.top, 4)
                 .padding(.bottom, 24)
+            }
+        }
+    }
+
+    private func bookRow(_ book: SearchViewModel.MergedBook) -> some View {
+        HStack(alignment: .top, spacing: 11) {
+            OnlineCoverView(url: book.coverUrl, title: book.name)
+                .frame(width: 46, height: 63)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(book.name)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+
+                Text([book.author, book.kindText]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " · "))
+                    .font(Typo.micro)
+                    .foregroundStyle(Palette.ink3)
+                    .lineLimit(1)
+
+                if !book.lastChapter.isEmpty {
+                    Text(book.lastChapter)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Palette.ink3.opacity(0.85))
+                        .lineLimit(1)
+                }
+
+                HStack(spacing: 4) {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.system(size: 9))
+                    Text("\(book.entries.count) 个源")
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(Palette.accent)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Palette.accentSoft)
+                .clipShape(Capsule())
+            }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Palette.ink3.opacity(0.6))
+                .padding(.top, 24)
+        }
+        .padding(10)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Palette.line, lineWidth: 1)
+        }
+    }
+
+    private var footer: some View {
+        Group {
+            if model.isSearching {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text("已搜 \(model.finishedSources)/\(model.totalSources) 个源")
+                        .font(Typo.micro)
+                        .foregroundStyle(Palette.ink3)
+                }
+                .padding(.top, 6)
+            } else if model.failedCount > 0 {
+                Button {
+                    model.retryFailed(env: env)
+                } label: {
+                    Text("\(model.failedCount) 个源失败 · 点这里重试")
+                        .font(Typo.micro)
+                        .foregroundStyle(Palette.accent)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+            } else if model.books.isEmpty {
+                Text("没有搜到「\(model.query)」。换个关键词，或去发现页换个源。")
+                    .font(Typo.micro)
+                    .foregroundStyle(Palette.ink3)
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 20)
             }
         }
     }
@@ -131,7 +250,7 @@ struct SearchView: View {
             }
 
             if model.history.isEmpty {
-                Text("搜过的书名会留在这里。书架里的书永远排在最前面。")
+                Text("搜过的书名会留在这里。结果会按书合并，点进去可以换源。")
                     .font(Typo.micro)
                     .foregroundStyle(Palette.ink3)
                     .padding(.top, 2)
@@ -150,234 +269,64 @@ struct SearchView: View {
         }
         .padding(.top, 8)
     }
-
-    private var localSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader(title: "书架", detail: "\(model.localMatches.count) 本", failed: false)
-
-            ForEach(model.localMatches) { book in
-                NavigationLink {
-                    DetailView(book: book)
-                } label: {
-                    HStack(spacing: 11) {
-                        BookCoverView(book: book, coverURL: env.library.absoluteCoverURL(for: book))
-                            .frame(width: 42, height: 58)
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(book.title)
-                                .font(.system(size: 14.5, weight: .medium))
-                                .foregroundStyle(Palette.ink)
-                                .lineLimit(1)
-                            Text([book.author, book.type == .novel ? "小说" : "漫画"]
-                                .compactMap { $0 }
-                                .filter { !$0.isEmpty }
-                                .joined(separator: " · "))
-                                .font(Typo.micro)
-                                .foregroundStyle(Palette.ink3)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                        Text("已在书架")
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(Palette.accent)
-                    }
-                    .padding(10)
-                    .background(Palette.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Palette.line, lineWidth: 1)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func groupSection(_ group: SearchViewModel.Group) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionHeader(
-                title: group.source.name,
-                detail: group.isLoading
-                    ? "搜索中…"
-                    : (group.error == nil ? "\(group.books.count) 本 · \(Int(group.elapsed * 1000))ms" : "失败"),
-                failed: group.error != nil
-            )
-
-            if group.isLoading {
-                ForEach(0..<2, id: \.self) { _ in
-                    skeletonRow
-                }
-            } else if let error = group.error {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.ink3)
-                    Text(error)
-                        .font(Typo.micro)
-                        .foregroundStyle(Palette.ink3)
-                        .lineLimit(2)
-                    Spacer(minLength: 6)
-                    Button("重试") { model.retry(group, env: env) }
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(Palette.accent)
-                }
-                .padding(11)
-                .background(Palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Palette.line, lineWidth: 1)
-                }
-            } else if group.books.isEmpty {
-                Text("这个源没有结果")
-                    .font(Typo.micro)
-                    .foregroundStyle(Palette.ink3)
-                    .padding(.vertical, 4)
-            } else {
-                ForEach(group.books) { book in
-                    NavigationLink {
-                        OnlineDetailView(online: book)
-                    } label: {
-                        resultRow(book)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
-    private func resultRow(_ book: OnlineBook) -> some View {
-        HStack(alignment: .top, spacing: 11) {
-            OnlineCoverView(url: book.coverUrl, title: book.name)
-                .frame(width: 42, height: 58)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(book.name)
-                    .font(.system(size: 14.5, weight: .medium))
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(1)
-                Text([book.author, book.kind]
-                    .filter { !$0.isEmpty }
-                    .joined(separator: " · "))
-                    .font(Typo.micro)
-                    .foregroundStyle(Palette.ink3)
-                    .lineLimit(1)
-                if !book.lastChapter.isEmpty {
-                    Text(book.lastChapter)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Palette.ink3.opacity(0.85))
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Palette.ink3.opacity(0.6))
-                .padding(.top, 18)
-        }
-        .padding(10)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Palette.line, lineWidth: 1)
-        }
-    }
-
-    private var skeletonRow: some View {
-        HStack(spacing: 11) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Palette.line.opacity(0.7))
-                .frame(width: 42, height: 58)
-            VStack(alignment: .leading, spacing: 6) {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Palette.line.opacity(0.7))
-                    .frame(height: 12)
-                    .frame(maxWidth: 150)
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Palette.line.opacity(0.5))
-                    .frame(height: 10)
-                    .frame(maxWidth: 90)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(10)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .redacted(reason: .placeholder)
-    }
-
-    private var footer: some View {
-        Group {
-            if model.isSearching {
-                HStack(spacing: 7) {
-                    ProgressView().controlSize(.small)
-                    Text("已回 \(model.finishedCount)/\(model.groups.count) 个源，剩下的还在路上")
-                        .font(Typo.micro)
-                        .foregroundStyle(Palette.ink3)
-                }
-                .padding(.top, 6)
-            } else if !model.hasResults {
-                Text("所有源都没有搜到「\(model.query)」。换个关键词，或者去发现页换个源。")
-                    .font(Typo.micro)
-                    .foregroundStyle(Palette.ink3)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 16)
-            }
-        }
-    }
-
-    private func sectionHeader(title: String, detail: String, failed: Bool) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(failed ? Palette.danger.opacity(0.8) : Palette.ink2)
-                .lineLimit(1)
-            Text(detail)
-                .font(.system(size: 10.5))
-                .foregroundStyle(Palette.ink3)
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 2)
-    }
 }
 
-/// 在线封面：先显示占位书名，图到了再换。
-struct OnlineCoverView: View {
-    let url: String
-    let title: String
+// MARK: - 选源（换源）
+
+struct SourceChooserSheet: View {
+    let book: SearchViewModel.MergedBook
+
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color(hex: 0xD9E3EC), Color(hex: 0xC3D2E0)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            Text(title)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
-                .minimumScaleFactor(0.7)
-                .padding(4)
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(Array(book.entries.enumerated()), id: \.offset) { index, entry in
+                        NavigationLink {
+                            OnlineDetailView(online: entry)
+                        } label: {
+                            HStack(spacing: 11) {
+                                OnlineCoverView(url: entry.coverUrl, title: entry.name)
+                                    .frame(width: 38, height: 52)
 
-            if let url = URL(string: url), !url.absoluteString.isEmpty {
-                AsyncImage(url: url) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Color.clear
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(sourceName(index))
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundStyle(Palette.ink)
+                                        .lineLimit(1)
+                                    if !entry.lastChapter.isEmpty {
+                                        Text(entry.lastChapter)
+                                            .font(Typo.micro)
+                                            .foregroundStyle(Palette.ink3)
+                                            .lineLimit(1)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                } header: {
+                    Text("选择书源")
+                } footer: {
+                    Text("同一个源点进去看详情，换源就是换一个站点的同一本书。")
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle(book.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { dismiss() }
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
-        }
+    }
+
+    private func sourceName(_ index: Int) -> String {
+        guard book.sourceNames.indices.contains(index) else { return "书源 \(index + 1)" }
+        return book.sourceNames[index]
     }
 }
 
@@ -420,6 +369,44 @@ struct FlowLayout: Layout {
             subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+/// 在线封面：先显示占位书名，图到了再换。
+struct OnlineCoverView: View {
+    let url: String
+    let title: String
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(hex: 0xD9E3EC), Color(hex: 0xC3D2E0)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Text(title)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .minimumScaleFactor(0.7)
+                .padding(4)
+
+            if let url = URL(string: url), !url.absoluteString.isEmpty {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color.clear
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
         }
     }
 }

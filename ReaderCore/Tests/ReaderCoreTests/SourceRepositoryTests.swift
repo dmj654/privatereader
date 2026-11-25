@@ -132,4 +132,32 @@ final class SourceRepositoryTests: XCTestCase {
         let source = try XCTUnwrap(service.executable(from: refreshed))
         XCTAssertFalse(source.enabled, "开关状态要以数据库为准")
     }
+
+    func testInvalidSourcesOnlyIncludesFailedOrTimeout() throws {
+        let repo = SourceRepository(db: database.writer)
+        try repo.upsert(BookSource(id: "ok", name: "正常", rawJson: "{}"))
+        try repo.upsert(BookSource(id: "bad", name: "失败", rawJson: "{}"))
+        try repo.upsert(BookSource(id: "slow", name: "超时", rawJson: "{}"))
+        try repo.upsert(BookSource(id: "new", name: "没测过", rawJson: "{}"))
+
+        try repo.markChecked(id: "ok", at: 1, result: "ok 120ms 3")
+        try repo.markChecked(id: "bad", at: 1, result: "failed: HTTP 404")
+        try repo.markChecked(id: "slow", at: 1, result: "timeout")
+
+        let invalid = try repo.invalidSources()
+
+        XCTAssertEqual(Set(invalid.map(\.id)), ["bad", "slow"],
+                       "正常与没测过的源不能被算成失效")
+    }
+
+    func testDeleteByIdsRemovesOnlyGivenSources() throws {
+        let repo = SourceRepository(db: database.writer)
+        try repo.upsert(BookSource(id: "a", name: "A", rawJson: "{}"))
+        try repo.upsert(BookSource(id: "b", name: "B", rawJson: "{}"))
+        try repo.upsert(BookSource(id: "c", name: "C", rawJson: "{}"))
+
+        try repo.delete(ids: ["a", "c"])
+
+        XCTAssertEqual(try repo.all().map(\.id), ["b"])
+    }
 }

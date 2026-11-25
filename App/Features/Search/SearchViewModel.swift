@@ -1,64 +1,79 @@
 import SwiftUI
 import ReaderCore
 
-/// 搜索页的状态与流程。放成 ObservableObject 是因为「逐组填充」要频繁局部刷新，
-/// 全塞进 View 的 @State 会让 body 变得难读。
+/// 搜索页状态。
+///
+/// 结果按「书名 + 作者」合并：同一本书在不同源里的条目收进一本书里，
+/// 界面上只出现一本书，点进去再选源（换源）。
 @MainActor
 final class SearchViewModel: ObservableObject {
-    struct Group: Identifiable {
+    enum Kind: String, CaseIterable, Identifiable {
+        case novel
+        case comic
+
+        var id: String { rawValue }
+        var title: String { self == .novel ? "小说" : "漫画" }
+    }
+
+    struct MergedBook: Identifiable {
         let id: String
-        let source: LegadoSource
-        var books: [OnlineBook] = []
-        var error: String?
-        var elapsed: Double = 0
-        var isLoading = true
+        var name: String
+        var author: String
+        var coverUrl: String
+        var kindText: String
+        var lastChapter: String
+        var entries: [OnlineBook]
+        var sourceNames: [String]
     }
 
     @Published var query = ""
-    @Published private(set) var groups: [Group] = []
-    @Published private(set) var localMatches: [Book] = []
-    @Published private(set) var isSearching = false
+    @Published var kind: Kind = .novel
+    @Published private(set) var books: [MergedBook] = []
     @Published private(set) var history: [String] = []
+    @Published private(set) var isSearching = false
+    @Published private(set) var totalSources = 0
+    @Published private(set) var finishedSources = 0
+    @Published private(set) var failedCount = 0
+    @Published private(set) var sourceNames: [String: String] = [:]
     @Published var errorMessage: String?
 
     private var task: Task<Void, Never>?
     private var coordinator: SearchCoordinator?
     private var searchedKey = ""
+    private var failedSources: [LegadoSource] = []
     private static let historyKey = "search.history"
 
     init() {
         history = UserDefaults.standard.stringArray(forKey: Self.historyKey) ?? []
     }
 
-    var hasResults: Bool {
-        !localMatches.isEmpty || groups.contains { !$0.books.isEmpty }
-    }
+    var hasResults: Bool { !books.isEmpty }
 
-    var finishedCount: Int { groups.filter { !$0.isLoading }.count }
-
-    func search(env: AppEnvironment) {
+    func search(env: AppEnvironment, force: Bool = false) {
         let key = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
-        guard key != searchedKey || groups.isEmpty else { return }
+        guard force || key != searchedKey || books.isEmpty else { return }
 
         task?.cancel()
         searchedKey = key
         remember(key)
 
-        localMatches = (try? env.books.all().filter { book in
-            book.title.localizedCaseInsensitiveContains(key)
-                || (book.author?.localizedCaseInsensitiveContains(key) ?? false)
-        }) ?? []
-
         isSearching = true
         errorMessage = nil
-        groups = []
+        books = []
+        failedCount = 0
+        finishedSources = 0
+        failedSources = []
+
+        let wantedComic = kind == .comic
 
         task = Task { [weak self] in
             guard let self else { return }
             let sources: [LegadoSource]
             do {
-                sources = try SourceImportService(repo: env.sources).enabledSources()
+                sources = try SourceImportService(repo: env.sources)
+                    .enabledSources()
+                    .filter { $0.isComic == wantedComic }
             } catch {
                 self.isSearching = false
                 self.errorMessage = "读取书源失败：\(error.localizedDescription)"
@@ -67,11 +82,14 @@ final class SearchViewModel: ObservableObject {
 
             guard !sources.isEmpty else {
                 self.isSearching = false
-                self.errorMessage = "还没有启用的书源。去「发现 → 书源」导入一份。"
+                self.errorMessage = wantedComic
+                    ? "还没有启用的漫画源。去「发现 → 书源」导入漫画源。"
+                    : "还没有启用的小说源。去「发现 → 书源」导入书源。"
                 return
             }
 
-            self.groups = sources.map { Group(id: $0.id, source: $0) }
+            self.totalSources = sources.count
+            self.finishedSources = 0
 
             let coordinator = SearchCoordinator(client: env.sourceClient)
             self.coordinator = coordinator
@@ -80,30 +98,46 @@ final class SearchViewModel: ObservableObject {
                 if Task.isCancelled { return }
                 self.apply(result)
             }
+
             self.isSearching = false
         }
     }
 
-    func retry(_ group: Group, env: AppEnvironment) {
-        guard let index = groups.firstIndex(where: { $0.id == group.id }) else { return }
-        groups[index].isLoading = true
-        groups[index].error = nil
+    func setKind(_ newKind: Kind, env: AppEnvironment) {
+        guard newKind != kind else { return }
+        kind = newKind
+        searchedKey = ""
+        books = []
+        failedCount = 0
+        finishedSources = 0
+        if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+            search(env: env, force: true)
+        }
+    }
+
+    func retryFailed(env: AppEnvironment) {
+        guard !failedSources.isEmpty, !searchedKey.isEmpty else { return }
+        let retry = failedSources
+        failedSources = []
+        failedCount = 0
+        isSearching = true
 
         let coordinator = coordinator ?? SearchCoordinator(client: env.sourceClient)
         self.coordinator = coordinator
 
         Task { [weak self] in
             guard let self else { return }
-            for await result in await coordinator.search(sources: [group.source], key: self.searchedKey) {
+            for await result in await coordinator.search(sources: retry, key: self.searchedKey) {
                 self.apply(result)
             }
+            self.isSearching = false
         }
     }
 
     func selectHistory(_ text: String, env: AppEnvironment) {
         query = text
         searchedKey = ""
-        search(env: env)
+        search(env: env, force: true)
     }
 
     func clearHistory() {
@@ -111,12 +145,56 @@ final class SearchViewModel: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Self.historyKey)
     }
 
+    // MARK: 合并
+
     private func apply(_ result: SourceSearchResult) {
-        guard let index = groups.firstIndex(where: { $0.id == result.source.id }) else { return }
-        groups[index].books = result.books
-        groups[index].error = result.errorText
-        groups[index].elapsed = result.elapsed
-        groups[index].isLoading = false
+        finishedSources += 1
+        sourceNames[result.source.id] = result.source.name
+
+        if let error = result.errorText, !error.isEmpty {
+            failedCount += 1
+            failedSources.append(result.source)
+            return
+        }
+
+        for online in result.books {
+            merge(online, sourceName: result.source.name)
+        }
+        books.sort { lhs, rhs in
+            if lhs.entries.count != rhs.entries.count {
+                return lhs.entries.count > rhs.entries.count
+            }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func merge(_ online: OnlineBook, sourceName: String) {
+        let key = identity(of: online)
+        if let index = books.firstIndex(where: { $0.id == key }) {
+            if !books[index].entries.contains(where: { $0.sourceId == online.sourceId }) {
+                books[index].entries.append(online)
+                books[index].sourceNames.append(sourceName)
+            }
+            if books[index].coverUrl.isEmpty { books[index].coverUrl = online.coverUrl }
+            if !online.lastChapter.isEmpty { books[index].lastChapter = online.lastChapter }
+        } else {
+            books.append(MergedBook(
+                id: key,
+                name: online.name,
+                author: online.author,
+                coverUrl: online.coverUrl,
+                kindText: online.kind,
+                lastChapter: online.lastChapter,
+                entries: [online],
+                sourceNames: [sourceName]
+            ))
+        }
+    }
+
+    private func identity(of book: OnlineBook) -> String {
+        let name = book.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let author = book.author.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return author.isEmpty ? name : name + "|" + author
     }
 
     private func remember(_ key: String) {

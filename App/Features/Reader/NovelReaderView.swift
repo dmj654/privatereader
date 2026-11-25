@@ -557,10 +557,10 @@ struct NovelReaderView: View {
             }
     }
 
-    /// 只有「阅读菜单打开」或「听书模式」才允许边缘退出。
-    /// 纯阅读时不退出——那时候从左边滑应该是翻上一页。
+    /// 只有「阅读菜单打开」时才允许边缘退出。
+    /// 纯阅读时从左边滑是翻上一页；听书模式不退出，避免滑一下就离开书。
     private var canEdgeExit: Bool {
-        mode == .listening || model.isMenuVisible
+        model.isMenuVisible && mode == .reading
     }
 
     /// 起点在屏幕最左侧 30pt 内、向右拖。
@@ -830,7 +830,8 @@ struct NovelReaderView: View {
                 scheduleSpeechResumeCheck(after: 0.6)
                 return
             }
-            if let text = model.realignSpeechToCurrentPage() {
+            let text = model.currentSpeechText() ?? model.realignSpeechToCurrentPage()
+            if let text {
                 speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
                 speech.speak(text)
             }

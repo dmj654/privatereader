@@ -568,6 +568,10 @@ final class NovelReaderViewModel: ObservableObject {
 
         speechQueue = SpeechQueue(sentences: queueSentences, index: queueStart)
         speechIndex = speechQueue?.index
+        // realign 已经把队列换到新页了，之前的"手动移动"标记必须清掉。
+        // 否则这条新句在本页念完时，onFinish 仍被当成"刚翻过页"而拒绝推进，
+        // 最后被看护重新对齐到页首——同一句就读了两遍。
+        lastManualMoveAt = 0
         // 这里**不要**再 syncPageToSpeech：起点本来就取自当前页，
         // 同步只会在句子跨页时把刚翻过去的那一页又拉回上一页。
         // 自动往下念时的翻页由 advanceSpeechText 内部的 sync 负责。
@@ -638,6 +642,11 @@ final class NovelReaderViewModel: ObservableObject {
         // 队列已经没了还写"朗读中"，用户会以为卡死。如实说停了，点播放能重开。
         guard let queue = speechQueue else { return "朗读已停止" }
         return "朗读中 · 第 \(chapterIndex + 1) 章 第 \(queue.index + 1)/\(queue.count) 句"
+    }
+
+    /// 当前该念的那一句。恢复时优先续念它，而不是回到页首重来。
+    func currentSpeechText() -> String? {
+        speechQueue?.current?.text
     }
 
     var speechDetailText: String {
