@@ -9,7 +9,7 @@ struct DetailView: View {
     @State private var progress: ReadingProgress?
     @State private var showDeleteConfirm = false
     @State private var showReader = false
-    @State private var showComicNotice = false
+    @State private var showComicReader = false
     @State private var groups: [BookGroup] = []
     @State private var chapterTitles: [String] = []
     @State private var chaptersLoading = false
@@ -38,10 +38,9 @@ struct DetailView: View {
             groupID = (try? env.books.fetch(id: book.id))?.groupId ?? book.groupId
             loadChapterTitles()
         }
-        .alert("漫画阅读器还没接上", isPresented: $showComicNotice) {
-            Button("知道了", role: .cancel) {}
-        } message: {
-            Text("这一版能导入漫画、在书架里看到它，但单页 / 条漫阅读器要到下一阶段才有。小说现在就能读。")
+        .fullScreenCover(isPresented: $showComicReader) {
+            ComicReaderView(book: book)
+                .environmentObject(env)
         }
         .fullScreenCover(isPresented: $showReader) {
             NovelReaderView(book: book, env: env, initialChapter: pendingChapter)
@@ -111,7 +110,7 @@ struct DetailView: View {
                     pendingChapter = nil
                     showReader = true
                 } else {
-                    showComicNotice = true
+                    showComicReader = true
                 }
             } label: {
                 Text(primaryTitle)

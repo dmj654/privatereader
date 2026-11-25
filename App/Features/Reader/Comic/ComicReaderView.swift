@@ -1,0 +1,363 @@
+import SwiftUI
+import UIKit
+import ReaderCore
+
+enum ComicMode: String, CaseIterable, Identifiable {
+    case page
+    case strip
+
+    var id: String { rawValue }
+    var title: String { self == .page ? "单页" : "条漫" }
+}
+
+enum ComicFit: String, CaseIterable, Identifiable {
+    case width
+    case height
+
+    var id: String { rawValue }
+    var title: String { self == .width ? "适应宽度" : "适应高度" }
+}
+
+struct ComicReaderView: View {
+    let book: Book
+
+    @EnvironmentObject private var env: AppEnvironment
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var store: ComicPageStore?
+    @State private var pages: [URL] = []
+    @State private var index = 0
+    @State private var mode: ComicMode = .page
+    @State private var showPanel = true
+    @State private var showDisplay = false
+    @State private var isZoomed = false
+    @State private var autoTask: Task<Void, Never>?
+
+    @AppStorage("comic.fit") private var fitRaw = ComicFit.height.rawValue
+    @AppStorage("comic.background") private var backgroundRaw = "canvas"
+    @AppStorage("comic.autoSeconds") private var autoSeconds = 0
+
+    private var fit: ComicFit { ComicFit(rawValue: fitRaw) ?? .height }
+
+    private var background: Color {
+        switch backgroundRaw {
+        case "black": return Color(hex: 0x111417)
+        case "white": return Color(hex: 0xF7F8FA)
+        default: return Palette.comicCanvas
+        }
+    }
+
+    private var decodeOptions: ComicPageStore.DecodeOptions {
+        let longest = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+        return ComicPageStore.DecodeOptions(maxPixelSize: Int(longest * 2))
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack {
+                background.ignoresSafeArea()
+
+                if pages.isEmpty {
+                    ProgressView().tint(Palette.accent)
+                } else if mode == .page {
+                    pageContent(size: proxy.size)
+                } else {
+                    StripReader(book: book,
+                                store: store,
+                                pages: pages,
+                                background: background)
+                }
+
+                if showPanel {
+                    VStack {
+                        topBar
+                        Spacer()
+                        ComicPanel(
+                            index: $index,
+                            pageCount: pages.count,
+                            mode: $mode,
+                            autoSeconds: $autoSeconds,
+                            onDisplay: { showDisplay = true },
+                            onExit: { dismiss() }
+                        )
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .statusBarHidden(!showPanel)
+        }
+        .navigationBarHidden(true)
+        .task { load() }
+        .onChange(of: index) { newValue in
+            persistPage(newValue)
+            prefetch(newValue)
+            restartAuto()
+        }
+        .onChange(of: mode) { _ in
+            isZoomed = false
+            restartAuto()
+        }
+        .sheet(isPresented: $showDisplay) {
+            ComicDisplaySheet(mode: $mode, fitRaw: $fitRaw,
+                              backgroundRaw: $backgroundRaw, autoSeconds: $autoSeconds)
+                .presentationDetents([.height(330)])
+        }
+        .onDisappear {
+            autoTask?.cancel()
+            store?.clearCache()
+        }
+    }
+
+    // MARK: 单页
+
+    private func pageContent(size: CGSize) -> some View {
+        ZStack {
+            if let image = store?.image(for: book, index: index, options: decodeOptions) {
+                ZoomablePageView(image: image, fit: fit, isZoomed: $isZoomed)
+                    .padding(.horizontal, fit == .height ? 10 : 0)
+                    .padding(.vertical, fit == .width ? 12 : 0)
+            } else {
+                ProgressView().tint(Palette.accent)
+            }
+
+            tapZones
+        }
+        .contentShape(Rectangle())
+        .gesture(pageDrag)
+    }
+
+    /// 左中右三块：左右翻页，中间呼面板。放大后整块让给图片拖动。
+    private var tapZones: some View {
+        HStack(spacing: 0) {
+            zone { turn(by: -1) }
+            zone { withAnimation(.easeInOut(duration: 0.16)) { showPanel.toggle() } }
+            zone { turn(by: 1) }
+        }
+        .allowsHitTesting(!isZoomed && mode == .page)
+    }
+
+    private func zone(_ action: @escaping () -> Void) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+    }
+
+    private var pageDrag: some Gesture {
+        DragGesture(minimumDistance: 18)
+            .onEnded { value in
+                guard !isZoomed, mode == .page else { return }
+                let width = value.translation.width
+                guard abs(width) > abs(value.translation.height), abs(width) > 50 else { return }
+                turn(by: width < 0 ? 1 : -1)
+            }
+    }
+
+    private func turn(by delta: Int) {
+        let target = index + delta
+        guard pages.indices.contains(target) else {
+            return
+        }
+        withAnimation(.easeOut(duration: 0.16)) { index = target }
+    }
+
+    // MARK: 顶栏
+
+    private var topBar: some View {
+        HStack {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Palette.ink2)
+                    .frame(width: 40, height: 40)
+                    .background(Palette.surface.opacity(0.94))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Text(book.title)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Palette.ink2)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(Palette.surface.opacity(0.94))
+                .clipShape(Capsule())
+
+            Spacer()
+
+            Button {
+                showDisplay = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Palette.ink2)
+                    .frame(width: 40, height: 40)
+                    .background(Palette.surface.opacity(0.94))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+    }
+
+    // MARK: 数据
+
+    private func load() {
+        guard store == nil else { return }
+        let store = ComicPageStore(paths: env.paths)
+        self.store = store
+        pages = store.pageURLs(for: book)
+
+        let saved = UserDefaults.standard.integer(forKey: pageKey)
+        index = min(max(saved, 0), max(pages.count - 1, 0))
+        prefetch(index)
+        restartAuto()
+    }
+
+    private var pageKey: String { "comic.page.\(book.id)" }
+
+    private func persistPage(_ value: Int) {
+        UserDefaults.standard.set(value, forKey: pageKey)
+    }
+
+    private func prefetch(_ value: Int) {
+        store?.prefetch(for: book, around: value, radius: 2, options: decodeOptions)
+    }
+
+    private func restartAuto() {
+        autoTask?.cancel()
+        guard autoSeconds > 0, mode == .page else { return }
+        autoTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(autoSeconds) * 1_000_000_000)
+                if Task.isCancelled { return }
+                if index + 1 < pages.count {
+                    index += 1
+                } else {
+                    return
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 单页缩放
+
+/// UIScrollView 包一层：双击放大、双指捏合、放大后单指拖动。
+struct ZoomablePageView: UIViewRepresentable {
+    let image: CGImage
+    let fit: ComicFit
+    @Binding var isZoomed: Bool
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scroll = UIScrollView()
+        scroll.delegate = context.coordinator
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 3
+        scroll.bouncesZoom = true
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.showsVerticalScrollIndicator = false
+        scroll.backgroundColor = .clear
+        scroll.decelerationRate = .fast
+
+        let imageView = UIImageView(image: UIImage(cgImage: image))
+        imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = true
+        scroll.addSubview(imageView)
+        context.coordinator.imageView = imageView
+        context.coordinator.scrollView = scroll
+
+        let doubleTap = UITapGestureRecognizer(target: context.coordinator,
+                                               action: #selector(Coordinator.handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        scroll.addGestureRecognizer(doubleTap)
+
+        return scroll
+    }
+
+    func updateUIView(_ scroll: UIScrollView, context: Context) {
+        context.coordinator.imageView?.image = UIImage(cgImage: image)
+        context.coordinator.layoutIfNeeded(size: scroll.bounds.size, fit: fit)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isZoomed: $isZoomed)
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        var imageView: UIImageView?
+        weak var scrollView: UIScrollView?
+        private var isZoomed: Binding<Bool>
+        private var lastSize: CGSize = .zero
+        private var lastFit: ComicFit?
+
+        init(isZoomed: Binding<Bool>) {
+            self.isZoomed = isZoomed
+        }
+
+        func layoutIfNeeded(size: CGSize, fit: ComicFit) {
+            guard size.width > 1, size.height > 1 else { return }
+            guard size != lastSize || fit != lastFit else { return }
+            lastSize = size
+            lastFit = fit
+
+            guard let imageView, let image = imageView.image else { return }
+            let imageSize = image.size
+            guard imageSize.width > 0, imageSize.height > 0 else { return }
+
+            let scale: CGFloat
+            switch fit {
+            case .width:
+                scale = size.width / imageSize.width
+            case .height:
+                scale = min(size.width / imageSize.width, size.height / imageSize.height)
+            }
+            let fitted = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+            imageView.frame = CGRect(origin: .zero, size: fitted)
+            scrollView?.contentSize = fitted
+            scrollView?.zoomScale = 1
+
+            // 适应宽度时页面比屏幕高，允许上下滚；否则内容不超出，滚动自然关闭。
+            scrollView?.alwaysBounceVertical = fit == .width
+            // 适应高度时页面完整可见，别让 UIScrollView 吃掉翻页拖动；
+            // 放大后再打开滚动，交给图片自己拖。
+            scrollView?.isScrollEnabled = fit == .width
+            isZoomed.wrappedValue = false
+        }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            imageView
+        }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            let zoomed = scrollView.zoomScale > 1.01
+            isZoomed.wrappedValue = zoomed
+            scrollView.isScrollEnabled = zoomed || lastFit == .width
+        }
+
+        @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+            guard let scrollView else { return }
+            if scrollView.zoomScale > 1.01 {
+                scrollView.setZoomScale(1, animated: true)
+                isZoomed.wrappedValue = false
+            } else {
+                let point = gesture.location(in: imageView)
+                let size = scrollView.bounds.size
+                let zoomScale: CGFloat = 2.2
+                let width = size.width / zoomScale
+                let height = size.height / zoomScale
+                let rect = CGRect(x: point.x - width / 2,
+                                  y: point.y - height / 2,
+                                  width: width,
+                                  height: height)
+                scrollView.zoom(to: rect, animated: true)
+                isZoomed.wrappedValue = true
+            }
+        }
+    }
+}

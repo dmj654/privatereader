@@ -164,8 +164,10 @@ final class OnlineBookServiceTests: XCTestCase {
         let bundle = try await service.prepare(onlineBook(), source: Self.source)
         try library.storeChapterText("本地已有", bookId: bundle.book.id, index: 1)
 
-        XCTAssertEqual(service.cachedBody(manifest: bundle.manifest, index: 1), "本地已有")
-        XCTAssertNil(service.cachedBody(manifest: bundle.manifest, index: 0))
+        let cached = await service.cachedBody(manifest: bundle.manifest, index: 1)
+        let missing = await service.cachedBody(manifest: bundle.manifest, index: 0)
+        XCTAssertEqual(cached, "本地已有")
+        XCTAssertNil(missing)
     }
 
     // MARK: 更新
