@@ -11,6 +11,10 @@ struct SettingsView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     group("阅读") {
+                        NavigationLink { ReaderSettingsView() } label: {
+                            row("textformat.size", "阅读设置", detail: nil)
+                        }
+                        divider
                         NavigationLink { StatsView() } label: {
                             row("chart.bar", "阅读统计", detail: nil)
                         }

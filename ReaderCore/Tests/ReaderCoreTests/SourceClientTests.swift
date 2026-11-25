@@ -228,7 +228,7 @@ final class SourceClientTests: XCTestCase {
             id: "s1",
             name: "发现源",
             url: "https://example.com",
-            exploreUrl: "周榜::https://example.com/week?page={{page}}\n分类&&/sort/1",
+            exploreUrl: "周榜::https://example.com/week?page={{page}}\n分类::/sort/1",
             ruleExplore: SearchRule(
                 bookList: ".item",
                 name: ".title@text",
@@ -242,8 +242,9 @@ final class SourceClientTests: XCTestCase {
         let categories = makeClient().categories(source: exploreSource())
 
         XCTAssertEqual(categories.map(\.name), ["周榜", "分类"])
-        XCTAssertEqual(categories[0].url, "https://example.com/week?page={{page}}")
-        XCTAssertEqual(categories[1].url, "/sort/1")
+        XCTAssertEqual(categories.count, 2)
+        XCTAssertEqual(categories.first?.url, "https://example.com/week?page={{page}}")
+        XCTAssertEqual(categories.last?.url, "/sort/1")
     }
 
     func testCategoriesEmptyWhenNoExploreUrl() {

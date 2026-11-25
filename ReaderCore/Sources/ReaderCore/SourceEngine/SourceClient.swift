@@ -62,12 +62,11 @@ public actor SourceClient {
 
     // MARK: 发现
 
-    /// 从 exploreUrl 里拆出「分类名 :: 地址」。legado 用换行分隔，
-    /// 也有源写成 `&&`，两种都认。
+    /// 从 exploreUrl 里拆出「分类名 :: 地址」。legado 用换行分隔每一项。
+    /// 不把 `&&` 当分隔符——它是规则串联符，地址里也可能出现。
     public nonisolated func categories(source: LegadoSource) -> [ExploreCategory] {
         guard let raw = source.exploreUrl, !raw.isEmpty else { return [] }
-        let normalized = raw.replacingOccurrences(of: "&&", with: "\n")
-        return normalized.components(separatedBy: .newlines).compactMap { line in
+        return raw.components(separatedBy: .newlines).compactMap { line in
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { return nil }
             let parts = trimmed.components(separatedBy: "::")
