@@ -93,8 +93,9 @@ struct ComicReaderView: View {
             prefetch(newValue)
             restartAuto()
         }
-        .onChange(of: mode) { _ in
+        .onChange(of: mode) { newValue in
             isZoomed = false
+            UserDefaults.standard.set(newValue.rawValue, forKey: modeKey)
             restartAuto()
         }
         .sheet(isPresented: $showDisplay) {
@@ -215,11 +216,17 @@ struct ComicReaderView: View {
 
         let saved = UserDefaults.standard.integer(forKey: pageKey)
         index = min(max(saved, 0), max(pages.count - 1, 0))
+        // 模式按书记住：同一本漫画下次打开还是上次的看法
+        if let raw = UserDefaults.standard.string(forKey: modeKey),
+           let savedMode = ComicMode(rawValue: raw) {
+            mode = savedMode
+        }
         prefetch(index)
         restartAuto()
     }
 
     private var pageKey: String { "comic.page.\(book.id)" }
+    private var modeKey: String { "comic.mode.\(book.id)" }
 
     private func persistPage(_ value: Int) {
         UserDefaults.standard.set(value, forKey: pageKey)

@@ -136,6 +136,8 @@ final class NovelReaderViewModel: ObservableObject {
                 log?.append("无历史位置，从第 1 章开始")
             }
             bookmarks = (try? bookmarkRepo.list(bookId: book.id)) ?? []
+            // 打开书就算看到了更新；角标不清会一直挂着，反而让人以为没追上。
+            try? booksRepo.clearNewChapterCount(bookId: book.id)
             sessionStartedAt = Date()
             errorMessage = nil
         } catch {

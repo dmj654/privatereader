@@ -39,7 +39,13 @@ final class StatsServiceTests: XCTestCase {
         return calendar.date(from: components)!
     }
 
+    private func ensureBook(_ id: String = "b1") throws {
+        guard (try? books.fetch(id: id)) == nil else { return }
+        try books.insert(Book(id: id, type: .novel, origin: .local, title: id))
+    }
+
     private func addSession(_ date: Date, seconds: Int, bookId: String = "b1") throws {
+        try ensureBook(bookId)
         try sessions.record(ReadingSession(
             bookId: bookId,
             startedAt: Int(date.timeIntervalSince1970),

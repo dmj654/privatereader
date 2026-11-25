@@ -101,7 +101,8 @@ public struct BackupExporter {
             }
         }
 
-        let dbBytes = (try? fileManager.attributesOfItem(atPath: database.path)[.size] as? Int) ?? 0
+        let attributes = try? fileManager.attributesOfItem(atPath: database.path)
+        let dbBytes = (attributes?[.size] as? Int) ?? 0
 
         if fileManager.fileExists(atPath: paths.covers.path) {
             try copy(paths.covers, to: staged.appendingPathComponent("Covers"))
@@ -139,8 +140,8 @@ public struct BackupExporter {
             try fileManager.removeItem(at: destination)
         }
 
-        let archive = try Archive(url: destination, accessMode: .create)
-        try addDirectory(staged, to: archive, base: staged)
+        var archive = try Archive(url: destination, accessMode: .create)
+        try addDirectory(staged, prefix: "", root: staged, to: &archive)
         return destination
     }
 
@@ -160,15 +161,17 @@ public struct BackupExporter {
             .first
     }
 
-    private func addDirectory(_ directory: URL, to archive: Archive, base: URL) throws {
+    /// `prefix` 由调用方逐层拼出来，不靠字符串裁剪绝对路径。
+    /// 沙盒路径在 macOS 上会被解析成 /private/var/...，裁剪很容易把前缀漏掉。
+    private func addDirectory(_ directory: URL, prefix: String, root: URL, to archive: inout Archive) throws {
         let items = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey])
         for item in items.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             let isDirectory = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            let relative = item.path.replacingOccurrences(of: base.path + "/", with: "")
+            let name = prefix.isEmpty ? item.lastPathComponent : prefix + "/" + item.lastPathComponent
             if isDirectory {
-                try addDirectory(item, to: archive, base: base)
+                try addDirectory(item, prefix: name, root: root, to: &archive)
             } else {
-                try archive.addEntry(with: relative, relativeTo: base)
+                try archive.addEntry(with: name, relativeTo: root)
             }
         }
     }

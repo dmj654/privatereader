@@ -5,6 +5,7 @@ import ReaderCore
 /// 榜单和分类要等源里的 exploreUrl 规则跑通再上，这里先不铺空架子。
 struct DiscoverView: View {
     @EnvironmentObject private var env: AppEnvironment
+    @EnvironmentObject private var router: TabRouter
 
     @State private var sourceCount = 0
     @State private var enabledCount = 0
@@ -134,22 +135,30 @@ struct DiscoverView: View {
     }
 
     private var searchHint: some View {
-        Card {
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 17, weight: .light))
-                    .foregroundStyle(Palette.ink2)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("去「搜索」找书")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Palette.ink)
-                    Text("搜索结果按源分组，谁先回谁先出")
-                        .font(Typo.micro)
+        Button {
+            router.selection = .search
+        } label: {
+            Card {
+                HStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .light))
+                        .foregroundStyle(Palette.ink2)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("去「搜索」找书")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Palette.ink)
+                        Text("搜索结果按源分组，谁先回谁先出")
+                            .font(Typo.micro)
+                            .foregroundStyle(Palette.ink3)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Palette.ink3)
                 }
-                Spacer(minLength: 0)
             }
         }
+        .buttonStyle(.plain)
     }
 
     private var rulesCard: some View {

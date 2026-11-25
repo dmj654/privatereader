@@ -72,6 +72,15 @@ public struct BookRepository {
         }
     }
 
+    public func clearNewChapterCount(bookId: String) throws {
+        try db.write { db in
+            try db.execute(
+                sql: "UPDATE book SET newChapterCount = 0 WHERE id = ?",
+                arguments: [bookId]
+            )
+        }
+    }
+
     public func touch(bookId: String, at timestamp: Int) throws {
         try db.write { db in
             try db.execute(

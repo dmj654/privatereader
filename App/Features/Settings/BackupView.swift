@@ -90,7 +90,7 @@ struct BackupView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(lastBackupText)
                         .font(Typo.headline)
-                        .foregroundStyle(Palette.ink)
+                        .foregroundStyle(isBackupStale ? Palette.danger : Palette.ink)
                     Text("建议每月备份一次。换机、重装前尤其要备份。")
                         .font(Typo.micro)
                         .foregroundStyle(Palette.ink3)
@@ -195,6 +195,12 @@ struct BackupView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var isBackupStale: Bool {
+        guard let lastBackup else { return true }
+        let days = Calendar.current.dateComponents([.day], from: lastBackup, to: Date()).day ?? 0
+        return days >= 30
     }
 
     private var lastBackupText: String {
