@@ -49,6 +49,8 @@ final class NovelReaderViewModel: ObservableObject {
 
     @Published var isLoading = true
     @Published var errorMessage: String?
+    /// 在线书正在下载这一章正文。界面据此显示"正在加载本章"，而不是空白页。
+    @Published private(set) var isContentLoading = false
     @Published var bookmarks: [Bookmark] = []
     @Published var isMenuVisible = false
     @Published var isDarkChrome = false
@@ -141,6 +143,51 @@ final class NovelReaderViewModel: ObservableObject {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         isLoading = false
+        loadBodyIfNeeded()
+    }
+
+    /// 在线书按需取正文：目录先到，正文后到，先给用户看到章名和页码。
+    func loadBodyIfNeeded(forceRefresh: Bool = false) {
+        guard book.origin == .online else { return }
+        guard chapters.indices.contains(chapterIndex) else { return }
+        guard forceRefresh || chapters[chapterIndex].body.isEmpty else {
+            Task { await provider.prefetch(for: book, around: chapterIndex) }
+            return
+        }
+        guard !isContentLoading else { return }
+
+        isContentLoading = true
+        errorMessage = nil
+        let index = chapterIndex
+
+        Task { @MainActor in
+            do {
+                let body = try await provider.body(for: book, index: index, forceRefresh: forceRefresh)
+                if chapters.indices.contains(index) {
+                    chapters[index] = NovelChapter(title: chapters[index].title, body: body)
+                }
+                if index == chapterIndex {
+                    // 正文变了，富文本缓存必须作废，否则分页还是按空的来
+                    cachedAttributed = nil
+                    cachedKey = nil
+                    repaginate()
+                    applyPendingPage()
+                }
+                isContentLoading = false
+                Task { await provider.prefetch(for: book, around: index) }
+            } catch {
+                isContentLoading = false
+                if index == chapterIndex {
+                    var text = (error as? LocalizedError)?.errorDescription
+                        ?? error.localizedDescription
+                    let cached = provider.cachedChapterIndices(for: book)
+                    if !cached.isEmpty {
+                        text += "\n这一章还没缓存。已缓存 \(cached.count) 章，可以在目录里选已缓存的章节离线阅读。"
+                    }
+                    errorMessage = text
+                }
+            }
+        }
     }
 
     // MARK: 分页
@@ -161,7 +208,13 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     func repaginate() {
-        guard lastPageSize.width > 40, let attributed = chapterAttributed() else { return }
+        guard lastPageSize.width > 40 else { return }
+        guard let attributed = chapterAttributed() else {
+            // 正文还没到（在线章）：清掉上一章的页面范围，否则会一直显示上一页。
+            pageRanges = []
+            pageIndex = 0
+            return
+        }
         pageRanges = Paginator.pageRanges(attributedString: attributed, pageSize: lastPageSize)
         pageIndex = min(pageIndex, max(pageRanges.count - 1, 0))
     }
@@ -213,6 +266,8 @@ final class NovelReaderViewModel: ObservableObject {
     /// 否则句子的偏移和页的范围会错位，高亮就会漂。
     private func chapterAttributed() -> NSAttributedString? {
         guard let chapter = currentChapter else { return nil }
+        // 在线章节还没下载完：不要先排一个只有标题的空页，等正文到了一起排。
+        if book.origin == .online, chapter.body.isEmpty { return nil }
         let key = CacheKey(chapter: chapterIndex, style: style, theme: theme.rawValue)
         if key == cachedKey, let cached = cachedAttributed { return cached }
 
@@ -290,6 +345,7 @@ final class NovelReaderViewModel: ObservableObject {
                 repaginate()
                 pageIndex = max(pageRanges.count - 1, 0)
                 persistProgress()
+                loadBodyIfNeeded()
             }
             return
         }
@@ -299,6 +355,7 @@ final class NovelReaderViewModel: ObservableObject {
                 repaginate()
                 pageIndex = 0
                 persistProgress()
+                loadBodyIfNeeded()
             }
             return
         }
@@ -351,6 +408,7 @@ final class NovelReaderViewModel: ObservableObject {
         repaginate()
         pageIndex = 0
         persistProgress()
+        loadBodyIfNeeded()
     }
 
     // MARK: 持久化

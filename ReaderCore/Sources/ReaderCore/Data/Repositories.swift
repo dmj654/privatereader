@@ -54,6 +54,15 @@ public struct BookRepository {
         }
     }
 
+    public func updateChapterCount(bookId: String, chapterCount: Int, newChapterCount: Int) throws {
+        try db.write { db in
+            try db.execute(
+                sql: "UPDATE book SET chapterCount = ?, newChapterCount = ? WHERE id = ?",
+                arguments: [chapterCount, newChapterCount, bookId]
+            )
+        }
+    }
+
     public func updateStatus(bookId: String, status: BookStatus) throws {
         try db.write { db in
             try db.execute(

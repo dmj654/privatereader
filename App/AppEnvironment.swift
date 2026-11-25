@@ -43,9 +43,15 @@ final class AppEnvironment: ObservableObject {
         self.sources = SourceRepository(db: database.writer)
         self.sessions = SessionRepository(db: database.writer)
         self.cache = CacheRepository(db: database.writer)
-        self.sourceClient = SourceClient()
+        let sourceClient = SourceClient()
+        self.sourceClient = sourceClient
         self.library = LibraryService(books: BookRepository(db: database.writer), paths: paths)
-        self.chapterProvider = ChapterProvider(paths: paths)
+        let onlineReading = OnlineReadingService(
+            library: OnlineLibrary(paths: paths),
+            sources: SourceRepository(db: database.writer),
+            client: sourceClient
+        )
+        self.chapterProvider = ChapterProvider(paths: paths, online: onlineReading)
         self.importLog = ImportLog(directory: paths.root)
         self.startupMessage = message
 

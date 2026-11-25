@@ -87,10 +87,30 @@ struct NovelReaderView: View {
 
                 if model.isLoading {
                     ProgressView().tint(Palette.accent)
-                } else if let error = model.errorMessage {
-                    EmptyStateView(symbol: "exclamationmark.triangle", title: "打不开这本书", message: error)
+                } else if let error = model.errorMessage, model.pageRanges.isEmpty {
+                    VStack(spacing: 10) {
+                        EmptyStateView(symbol: "exclamationmark.triangle", title: "这一章没打开", message: error)
+                        if model.book.origin == .online {
+                            Button("重试") { model.loadBodyIfNeeded(forceRefresh: true) }
+                                .buttonStyle(SecondaryButtonStyle(height: 40))
+                                .frame(width: 140)
+                        }
+                    }
                 } else {
                     pageArea(size: proxy.size)
+                        .overlay {
+                            if model.isContentLoading {
+                                VStack(spacing: 8) {
+                                    ProgressView().tint(Palette.accent)
+                                    Text("正在加载本章…")
+                                        .font(Typo.micro)
+                                        .foregroundStyle(model.theme.textColor.opacity(0.5))
+                                }
+                                .padding(18)
+                                .background(model.theme.background.opacity(0.9))
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                        }
                 }
 
                 if model.isMenuVisible && !editingZones {
