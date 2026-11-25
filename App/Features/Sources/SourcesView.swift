@@ -1,0 +1,410 @@
+import SwiftUI
+import UniformTypeIdentifiers
+import ReaderCore
+
+/// 书源管理：列表、开关、体检、删除、导入。
+///
+/// 2500 条源不可能一条条手点，所以「测一下全部」是主操作；
+/// 列表默认按「启用 → 名称」排，关掉的沉在下面。
+struct SourcesView: View {
+    @EnvironmentObject private var env: AppEnvironment
+    @State private var sources: [BookSource] = []
+    @State private var health: [String: SourceHealthStatus] = [:]
+    @State private var checking: Set<String> = []
+    @State private var isCheckingAll = false
+    @State private var showingImport = false
+    @State private var errorMessage: String?
+    @State private var confirmDeleteAll = false
+
+    private var enabledCount: Int { sources.filter(\.enabled).count }
+
+    var body: some View {
+        ZStack {
+            Palette.bg.ignoresSafeArea()
+
+            if sources.isEmpty {
+                emptyState
+            } else {
+                list
+            }
+        }
+        .navigationTitle("书源")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingImport = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .accessibilityLabel("导入书源")
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if !sources.isEmpty { bottomBar }
+        }
+        .sheet(isPresented: $showingImport) {
+            SourceImportSheet { summary in
+                reload()
+                if summary.total > 0 {
+                    errorMessage = nil
+                }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .alert("出错了", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("知道了", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .confirmationDialog("删除全部书源？", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+            Button("删除全部", role: .destructive) { deleteAll() }
+        } message: {
+            Text("只删书源，书架里的书不受影响。")
+        }
+        .onAppear(perform: reload)
+    }
+
+    // MARK: 列表
+
+    private var list: some View {
+        ScrollView {
+            LazyVStack(spacing: 10) {
+                summaryCard
+                ForEach(sources) { source in
+                    row(source)
+                }
+                Text("共 \(sources.count) 条 · 启用 \(enabledCount) 条")
+                    .font(Typo.micro)
+                    .foregroundStyle(Palette.ink3)
+                    .padding(.top, 4)
+            }
+            .padding(.horizontal, Spacing.l)
+            .padding(.top, 10)
+            .padding(.bottom, 24)
+        }
+    }
+
+    private var summaryCard: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("已导入 \(sources.count) 条")
+                    .font(Typo.headline)
+                    .foregroundStyle(Palette.ink)
+                Text("启用 \(enabledCount) 条 · 搜索只走启用的源")
+                    .font(Typo.micro)
+                    .foregroundStyle(Palette.ink3)
+            }
+            Spacer(minLength: 0)
+            Menu {
+                Button("测一下启用的源") { checkAll() }
+                Button("删除全部书源", role: .destructive) { confirmDeleteAll = true }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Palette.ink2)
+                    .frame(width: 34, height: 34)
+                    .background(Palette.surfaceAlt)
+                    .clipShape(Circle())
+            }
+        }
+        .padding(14)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(Palette.line, lineWidth: 1)
+        }
+    }
+
+    private func row(_ source: BookSource) -> some View {
+        let status = health[source.id]
+        let isChecking = checking.contains(source.id)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(source.name)
+                    .font(.system(size: 14.5, weight: .medium))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+
+                if source.type == 2 {
+                    Text("漫画")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(Palette.accentDeep)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1.5)
+                        .background(Palette.accentSoft)
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                }
+
+                Spacer(minLength: 6)
+
+                Toggle("", isOn: Binding(
+                    get: { source.enabled },
+                    set: { setEnabled(source, $0) }
+                ))
+                .labelsHidden()
+                .tint(Palette.accent)
+                .scaleEffect(0.86)
+            }
+
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(statusColor(status, enabled: source.enabled))
+                    .frame(width: 5, height: 5)
+
+                Text(statusText(status, enabled: source.enabled, checking: isChecking))
+                    .font(Typo.micro)
+                    .foregroundStyle(status == nil ? Palette.ink3 : Palette.ink2)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    check(source)
+                } label: {
+                    Text(isChecking ? "检测中" : "测一下")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(isChecking ? Palette.ink3 : Palette.accent)
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                        .background(Palette.accentSoft.opacity(isChecking ? 0.5 : 1))
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isChecking)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Palette.line, lineWidth: 1)
+        }
+        .opacity(source.enabled ? 1 : 0.62)
+        .contextMenu {
+            Button(source.enabled ? "关闭" : "启用") { setEnabled(source, !source.enabled) }
+            Button("测一下") { check(source) }
+            Button("删除", role: .destructive) { delete(source) }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            EmptyStateView(
+                symbol: "tray.and.arrow.down",
+                title: "还没有书源",
+                message: "导入 legado 格式的书源 JSON，就能搜索和阅读网文。"
+            )
+            Button("导入书源") { showingImport = true }
+                .buttonStyle(PrimaryButtonStyle())
+                .padding(.horizontal, 44)
+        }
+    }
+
+    private var bottomBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                checkAll()
+            } label: {
+                Text(isCheckingAll ? "正在检测…" : "测一下全部")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Palette.ink)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(Palette.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.button, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Radius.button, style: .continuous)
+                            .strokeBorder(Palette.lineStrong, lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+            .disabled(isCheckingAll || sources.isEmpty)
+
+            Button {
+                showingImport = true
+            } label: {
+                Text("导入")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 96)
+                    .frame(height: 44)
+                    .background(Palette.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.button, style: .continuous))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, Spacing.l)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Palette.line).frame(height: 0.5)
+        }
+    }
+
+    // MARK: 状态
+
+    private func statusText(_ status: SourceHealthStatus?, enabled: Bool, checking: Bool) -> String {
+        if checking { return "正在请求源站…" }
+        guard let status else {
+            return enabled ? "未检测" : "已关闭"
+        }
+        switch status {
+        case .ok(let ms, let count):
+            return "正常 · \(ms)ms · \(count) 条结果"
+        case .timeout:
+            return "超时 · 源站没在 8 秒内响应"
+        case .failed(let message):
+            return "失败 · \(message)"
+        case .skipped(let reason):
+            return reason
+        }
+    }
+
+    private func statusColor(_ status: SourceHealthStatus?, enabled: Bool) -> Color {
+        guard enabled else { return Palette.ink3.opacity(0.5) }
+        guard let status else { return Palette.ink3.opacity(0.6) }
+        switch status {
+        case .ok: return Color(hex: 0x4E8A5F)
+        case .timeout: return Color(hex: 0xC08A3E)
+        case .failed: return Palette.danger
+        case .skipped: return Palette.ink3.opacity(0.6)
+        }
+    }
+
+    // MARK: 动作
+
+    private func reload() {
+        do {
+            let all = try env.sources.all()
+            sources = all.sorted { lhs, rhs in
+                if lhs.enabled != rhs.enabled { return lhs.enabled && !rhs.enabled }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func setEnabled(_ source: BookSource, _ enabled: Bool) {
+        do {
+            try env.sources.setEnabled(id: source.id, enabled: enabled)
+            if var updated = sources.first(where: { $0.id == source.id }) {
+                updated.enabled = enabled
+                if let index = sources.firstIndex(where: { $0.id == source.id }) {
+                    sources[index] = updated
+                }
+            }
+            // 开关改了顺序也要跟着变
+            reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func delete(_ source: BookSource) {
+        do {
+            try env.sources.delete(id: source.id)
+            health[source.id] = nil
+            reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteAll() {
+        do {
+            try env.sources.deleteAll()
+            health = [:]
+            reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func check(_ source: BookSource) {
+        guard !checking.contains(source.id) else { return }
+        checking.insert(source.id)
+
+        Task {
+            let executable = SourceImportService(repo: env.sources).executable(from: source)
+            let status: SourceHealthStatus
+            if let executable {
+                status = await SourceHealthChecker(client: env.sourceClient).check(executable)
+            } else {
+                status = .failed("书源 JSON 解析失败，建议重新导入")
+            }
+            await MainActor.run {
+                health[source.id] = status
+                checking.remove(source.id)
+                record(status, for: source)
+            }
+        }
+    }
+
+    private func checkAll() {
+        guard !isCheckingAll else { return }
+        isCheckingAll = true
+        let targets = sources.filter(\.enabled)
+
+        Task {
+            let service = SourceImportService(repo: env.sources)
+            let checker = SourceHealthChecker(client: env.sourceClient)
+            await withTaskGroup(of: (String, SourceHealthStatus?).self) { group in
+                for source in targets {
+                    group.addTask {
+                        guard let executable = service.executable(from: source) else {
+                            return (source.id, nil)
+                        }
+                        return (source.id, await checker.check(executable))
+                    }
+                }
+                for await (id, status) in group {
+                    await MainActor.run {
+                        if let status { health[id] = status }
+                        checking.remove(id)
+                    }
+                }
+            }
+            await MainActor.run {
+                isCheckingAll = false
+                var ok = 0, bad = 0
+                for source in targets {
+                    switch health[source.id] {
+                    case .ok: ok += 1
+                    case .none: break
+                    case .some: bad += 1
+                    }
+                }
+                if bad > 0 || ok == 0 {
+                    errorMessage = "检测完成：\(ok) 条正常，\(bad) 条有问题。有问题的源已标红，可以关掉或删掉。"
+                }
+            }
+        }
+    }
+
+    /// 把体检结果写回库，下次进来还能看到上次的结论。
+    private func record(_ status: SourceHealthStatus, for source: BookSource) {
+        let text: String
+        switch status {
+        case .ok(let ms, let count): text = "ok \(ms)ms \(count)"
+        case .timeout: text = "timeout"
+        case .failed(let message): text = "failed: \(message)"
+        case .skipped(let reason): text = "skipped: \(reason)"
+        }
+        try? env.sources.markChecked(
+            id: source.id,
+            at: Int(Date().timeIntervalSince1970),
+            result: text
+        )
+    }
+}

@@ -14,6 +14,7 @@ final class AppEnvironment: ObservableObject {
     let sources: SourceRepository
     let sessions: SessionRepository
     let cache: CacheRepository
+    let sourceClient: SourceClient
     let library: LibraryService
     let chapterProvider: ChapterProvider
     let importLog: ImportLog
@@ -42,6 +43,7 @@ final class AppEnvironment: ObservableObject {
         self.sources = SourceRepository(db: database.writer)
         self.sessions = SessionRepository(db: database.writer)
         self.cache = CacheRepository(db: database.writer)
+        self.sourceClient = SourceClient()
         self.library = LibraryService(books: BookRepository(db: database.writer), paths: paths)
         self.chapterProvider = ChapterProvider(paths: paths)
         self.importLog = ImportLog(directory: paths.root)
