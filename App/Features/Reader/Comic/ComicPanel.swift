@@ -7,6 +7,7 @@ struct ComicPanel: View {
     @Binding var mode: ComicMode
     @Binding var autoSeconds: Int
     let onDisplay: () -> Void
+    let onHide: () -> Void
     let onExit: () -> Void
 
     var body: some View {
@@ -26,6 +27,16 @@ struct ComicPanel: View {
                     .padding(.vertical, 3)
                     .background(Palette.surfaceAlt)
                     .clipShape(Capsule())
+
+                Button(action: onHide) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Palette.ink3)
+                        .frame(width: 26, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("收起菜单")
             }
 
             if pageCount > 1 {

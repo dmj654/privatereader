@@ -50,6 +50,9 @@ final class SpeechEngine: NSObject, ObservableObject {
     /// 只靠 `isSpeaking` 判断，回调仍会去拿下一章然后重新开口——"退出到书架还在读"就是这么来的。
     private var isPlaybackRequested = false
 
+    /// 用户是否期望继续朗读。阅读页用它判断"该有声却没声"。
+    var isActive: Bool { isPlaybackRequested }
+
     // MARK: 卡死看门狗
     //
     // AVSpeechSynthesizer 有两个真实的坏状态：
@@ -211,7 +214,7 @@ final class SpeechEngine: NSObject, ObservableObject {
             self.recoverFromStall()
         }
         startWatchdog = startItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: startItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: startItem)
 
         armFinishWatchdog(for: text, generation: generation)
     }
@@ -249,7 +252,7 @@ final class SpeechEngine: NSObject, ObservableObject {
             self.recoverFromStall()
         }
         finishWatchdog = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: item)
     }
 
     private func recoverFromStall() {

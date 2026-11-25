@@ -15,25 +15,17 @@ public struct SourceImportService {
     @discardableResult
     public func importJSON(_ data: Data, forceEnabled: Bool? = nil) throws -> SourceImportSummary {
         let parsed = try LegadoParser.parse(data: data)
-        var added = 0
-        var updated = 0
-
-        for source in parsed {
-            let record = BookSource(
+        let records = parsed.map { source in
+            BookSource(
                 id: source.id,
                 name: source.name,
                 type: source.type,
                 enabled: forceEnabled ?? source.enabled,
                 rawJson: source.rawJson
             )
-            if try repo.upsert(record) {
-                added += 1
-            } else {
-                updated += 1
-            }
         }
-
-        return SourceImportSummary(added: added, updated: updated)
+        let result = try repo.merge(records)
+        return SourceImportSummary(added: result.added, updated: result.updated)
     }
 
     @discardableResult

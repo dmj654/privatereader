@@ -34,6 +34,17 @@ struct SourceImportSheet: View {
                         if let summary {
                             resultCard(summary)
                         }
+
+                        if isImporting {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("正在解析并写入，几千条源可能要十几秒…")
+                                    .font(Typo.micro)
+                                    .foregroundStyle(Palette.ink3)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 4)
+                        }
                     }
                     .padding(.horizontal, Spacing.l)
                     .padding(.vertical, 14)
@@ -60,7 +71,8 @@ struct SourceImportSheet: View {
             }
             .fileImporter(
                 isPresented: $showingFilePicker,
-                allowedContentTypes: [.json, .plainText, .text],
+                // 网盘/微信发来的文件经常只标成 public.data，限制太严会灰掉选不中
+                allowedContentTypes: [.json, .plainText, .text, .data, .item],
                 allowsMultipleSelection: false
             ) { result in
                 handleFile(result)
@@ -213,13 +225,28 @@ struct SourceImportSheet: View {
     private func handleFile(_ result: Result<[URL], Error>) {
         do {
             guard let url = try result.get().first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let data = try Data(contentsOf: url)
-            try importData(data)
+            let data = try readPicked(url)
+            importData(data)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "读取文件失败：\(error.localizedDescription)\n可以在「文件」里先拷到本机再试，或直接粘贴内容。"
         }
+    }
+
+    /// 文件 App / 网盘给的 URL 必须走协调读，直接 Data(contentsOf:) 有时拿不到权限。
+    private func readPicked(_ url: URL) throws -> Data {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        var coordinationError: NSError?
+        var readResult: Result<Data, Error>?
+        NSFileCoordinator().coordinate(readingItemAt: url,
+                                       options: [.withoutChanges],
+                                       error: &coordinationError) { readURL in
+            readResult = Result { try Data(contentsOf: readURL) }
+        }
+        if let coordinationError { throw coordinationError }
+        guard let readResult else { throw CocoaError(.fileReadUnknown) }
+        return try readResult.get()
     }
 
     private func importText() {
@@ -235,11 +262,7 @@ struct SourceImportSheet: View {
             errorMessage = "文本编码不是 UTF-8"
             return
         }
-        do {
-            try importData(data)
-        } catch {
-            errorMessage = readable(error)
-        }
+        importData(data)
     }
 
     private func download(_ url: URL) {
@@ -253,12 +276,8 @@ struct SourceImportSheet: View {
                     throw URLError(.badServerResponse)
                 }
                 await MainActor.run {
-                    do {
-                        try importData(data)
-                    } catch {
-                        errorMessage = readable(error)
-                    }
                     isImporting = false
+                    importData(data)
                 }
             } catch {
                 await MainActor.run {
@@ -269,14 +288,33 @@ struct SourceImportSheet: View {
         }
     }
 
-    private func importData(_ data: Data) throws {
+    /// 2500 条源、13MB JSON：解析和写库都放到后台，主线程只负责显示进度。
+    private func importData(_ data: Data) {
         isImporting = true
-        defer { isImporting = false }
-        let service = SourceImportService(repo: env.sources)
-        let result = try service.importJSON(data, forceEnabled: forceEnable)
-        summary = result
-        text = ""
-        onImported(result)
+        summary = nil
+        errorMessage = nil
+
+        let repo = env.sources
+        let force = forceEnable
+
+        Task {
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try SourceImportService(repo: repo).importJSON(data, forceEnabled: force)
+                }.value
+                await MainActor.run {
+                    isImporting = false
+                    summary = result
+                    text = ""
+                    onImported(result)
+                }
+            } catch {
+                await MainActor.run {
+                    isImporting = false
+                    errorMessage = readable(error)
+                }
+            }
+        }
     }
 
     private func readable(_ error: Error) -> String {

@@ -65,7 +65,8 @@ struct ComicReaderView: View {
                     StripReader(book: book,
                                 store: store,
                                 pages: pages,
-                                background: background)
+                                background: background,
+                                onTap: togglePanel)
                 }
 
                 if showPanel {
@@ -78,6 +79,7 @@ struct ComicReaderView: View {
                             mode: $mode,
                             autoSeconds: $autoSeconds,
                             onDisplay: { showDisplay = true },
+                            onHide: togglePanel,
                             onExit: { dismiss() }
                         )
                     }
@@ -131,7 +133,7 @@ struct ComicReaderView: View {
     private var tapZones: some View {
         HStack(spacing: 0) {
             zone { turn(by: -1) }
-            zone { withAnimation(.easeInOut(duration: 0.16)) { showPanel.toggle() } }
+            zone { togglePanel() }
             zone { turn(by: 1) }
         }
         .allowsHitTesting(!isZoomed && mode == .page)
@@ -151,6 +153,10 @@ struct ComicReaderView: View {
                 guard abs(width) > abs(value.translation.height), abs(width) > 50 else { return }
                 turn(by: width < 0 ? 1 : -1)
             }
+    }
+
+    private func togglePanel() {
+        withAnimation(.easeInOut(duration: 0.16)) { showPanel.toggle() }
     }
 
     private func turn(by delta: Int) {

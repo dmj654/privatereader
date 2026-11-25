@@ -68,6 +68,10 @@ struct NovelReaderView: View {
     /// 每翻一页都打断语音会赶不上，最后往往一句都没开口。
     @State private var speechRealignWork: DispatchWorkItem?
 
+    /// "页面变了但引擎没在念"的兜底。realign 只有一条路径，
+    /// 句末/跨章/在线章节加载都可能把它漏掉，这里统一补一次。
+    @State private var speechResumeWork: DispatchWorkItem?
+
     init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
         _model = StateObject(wrappedValue: NovelReaderViewModel(
             book: book,
@@ -131,6 +135,8 @@ struct NovelReaderView: View {
             .statusBarHidden(model.isMenuVisible == false && !editingZones)
             .onAppear { viewWidth = proxy.size.width }
             .onChange(of: proxy.size) { viewWidth = $0.width }
+            .onChange(of: model.pageIndex) { _ in scheduleSpeechResumeCheck() }
+            .onChange(of: model.chapterIndex) { _ in scheduleSpeechResumeCheck() }
         }
         .navigationBarHidden(true)
         .preferredColorScheme(model.theme.chromeStyle)
@@ -770,6 +776,31 @@ struct NovelReaderView: View {
         }
         speechRealignWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+
+        scheduleSpeechResumeCheck(after: 1.1)
+    }
+
+    /// 朗读中只要页面变了，就确认引擎真的在出声。
+    /// 1.1 秒还没开口就重新对齐当前页；在线章节正在下载则等下载完再试。
+    private func scheduleSpeechResumeCheck(after delay: TimeInterval = 1.1) {
+        guard model.isSpeechPrepared, speech.isActive, !speech.isPaused else { return }
+
+        speechResumeWork?.cancel()
+        let work = DispatchWorkItem {
+            guard model.isSpeechPrepared, speech.isActive, !speech.isPaused else { return }
+            guard !speech.isSpeaking else { return }
+
+            if model.isContentLoading {
+                scheduleSpeechResumeCheck(after: 0.8)
+                return
+            }
+            if let text = model.realignSpeechToCurrentPage() {
+                speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
+                speech.speak(text)
+            }
+        }
+        speechResumeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// 面板上的翻页 / 翻章之后，从新页的第一句重新念。

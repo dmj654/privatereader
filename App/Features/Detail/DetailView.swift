@@ -164,9 +164,7 @@ struct DetailView: View {
     }
 
     private var primaryTitle: String {
-        if book.type == .comic {
-            return "漫画阅读器待接入"
-        }
+        guard book.type == .novel else { return "开始阅读" }
         guard let progress, progress.chapterIndex > 0 else { return "开始阅读" }
         return "继续阅读 · 第 \(progress.chapterIndex + 1) 章"
     }

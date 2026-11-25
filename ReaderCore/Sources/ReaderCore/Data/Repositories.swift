@@ -213,6 +213,24 @@ public struct SourceRepository {
         try db.read { try BookSource.fetchOne($0, key: id) }
     }
 
+    /// 一次事务写完。2500 条源逐条开事务在真机上要几十秒，
+    /// 表现出来就是"点了导入没反应"。
+    public func merge(_ sources: [BookSource]) throws -> (added: Int, updated: Int) {
+        try db.write { db in
+            var added = 0
+            var updated = 0
+            for source in sources {
+                if try BookSource.fetchOne(db, key: source.id) == nil {
+                    added += 1
+                } else {
+                    updated += 1
+                }
+                try source.save(db)
+            }
+            return (added, updated)
+        }
+    }
+
     public func all() throws -> [BookSource] {
         try db.read { try BookSource.order(Column("name")).fetchAll($0) }
     }

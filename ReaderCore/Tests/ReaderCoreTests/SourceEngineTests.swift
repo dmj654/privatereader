@@ -151,6 +151,17 @@ final class LegadoParserTests: XCTestCase {
 
     // MARK: 错误
 
+    func testUTF8BOMIsTolerated() throws {
+        let json = "[{\"bookSourceName\":\"带BOM\",\"bookSourceUrl\":\"https://bom.example\"}]"
+        var data = Data([0xEF, 0xBB, 0xBF])
+        data.append(Data(json.utf8))
+
+        let sources = try LegadoParser.parse(data: data)
+
+        XCTAssertEqual(sources.count, 1)
+        XCTAssertEqual(sources[0].name, "带BOM")
+    }
+
     func testInvalidJSONThrows() {
         XCTAssertThrowsError(try LegadoParser.parse(json: "这不是 JSON")) { error in
             XCTAssertEqual(error as? LegadoParserError, .invalidJSON)

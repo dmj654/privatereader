@@ -11,6 +11,7 @@ struct StripReader: View {
     let store: ComicPageStore?
     let pages: [URL]
     let background: Color
+    let onTap: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -30,6 +31,9 @@ struct StripReader: View {
                 }
             }
             .scrollIndicators(.hidden)
+            .simultaneousGesture(
+                TapGesture().onEnded { onTap() }
+            )
         }
     }
 }

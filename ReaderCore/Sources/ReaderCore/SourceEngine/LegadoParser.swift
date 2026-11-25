@@ -27,6 +27,11 @@ public enum LegadoParser {
     }
 
     public static func parse(data: Data) throws -> [LegadoSource] {
+        var data = data
+        // 有些编辑器/网盘导出的 JSON 带 UTF-8 BOM，JSONSerialization 会直接判失败
+        if data.starts(with: [0xEF, 0xBB, 0xBF]) {
+            data = data.dropFirst(3)
+        }
         guard let root = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
             throw LegadoParserError.invalidJSON
         }

@@ -86,8 +86,13 @@ struct ShelfView: View {
             dialogMessage(for: item)
         }
         .fullScreenCover(item: $readingBook, onDismiss: { reload() }) { book in
-            NovelReaderView(book: book, env: env)
-                .environmentObject(env)
+            if book.type == .novel {
+                NovelReaderView(book: book, env: env)
+                    .environmentObject(env)
+            } else {
+                ComicReaderView(book: book)
+                    .environmentObject(env)
+            }
         }
         .alert("导入失败", isPresented: Binding(
             get: { importError != nil },
@@ -578,11 +583,8 @@ struct ShelfView: View {
     private func open(_ book: Book) {
         // 长按已经弹出面板时，松手不再当作点击
         guard presentation == nil else { return }
-        if book.type == .novel {
-            readingBook = book
-        } else {
-            presentation = .detail(book)
-        }
+        // 小说和漫画都直接进阅读器；详情页留给长按菜单里的「书籍信息」。
+        readingBook = book
     }
 
     // MARK: 书籍操作
