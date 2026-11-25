@@ -148,7 +148,7 @@ final class NovelReaderViewModel: ObservableObject {
 
     /// 在线书按需取正文：目录先到，正文后到，先给用户看到章名和页码。
     func loadBodyIfNeeded(forceRefresh: Bool = false) {
-        guard book.origin == .online else { return }
+        guard book.origin == .remote else { return }
         guard chapters.indices.contains(chapterIndex) else { return }
         guard forceRefresh || chapters[chapterIndex].body.isEmpty else {
             Task { await provider.prefetch(for: book, around: chapterIndex) }
@@ -267,7 +267,7 @@ final class NovelReaderViewModel: ObservableObject {
     private func chapterAttributed() -> NSAttributedString? {
         guard let chapter = currentChapter else { return nil }
         // 在线章节还没下载完：不要先排一个只有标题的空页，等正文到了一起排。
-        if book.origin == .online, chapter.body.isEmpty { return nil }
+        if book.origin == .remote, chapter.body.isEmpty { return nil }
         let key = CacheKey(chapter: chapterIndex, style: style, theme: theme.rawValue)
         if key == cachedKey, let cached = cachedAttributed { return cached }
 

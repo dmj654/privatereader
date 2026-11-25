@@ -40,6 +40,8 @@ struct ShelfView: View {
     @State private var lastReport: ImportReport?
     @State private var readingBook: Book?
     @State private var importError: String?
+    @State private var updateCount = 0
+    @State private var isCheckingUpdates = false
 
     private let columns = [
         GridItem(.flexible(), spacing: 13),
@@ -59,7 +61,10 @@ struct ShelfView: View {
             }
         }
         .navigationBarHidden(true)
-        .task { reload() }
+        .task {
+            reload()
+            await checkUpdates()
+        }
         .onAppear { reload() }
         .sheet(item: Binding(
             get: { presentation.flatMap { isSheet($0) ? $0 : nil } },
@@ -341,6 +346,16 @@ struct ShelfView: View {
 
     @ViewBuilder
     private var banners: some View {
+        if updateCount > 0 {
+            banner(
+                icon: "arrow.triangle.2.circlepath",
+                tint: Palette.accent,
+                text: "\(updateCount) 本在追的书有更新",
+                onDetail: nil,
+                onClose: { updateCount = 0 }
+            )
+        }
+
         if let message = env.startupMessage {
             banner(
                 icon: "exclamationmark.triangle.fill",
@@ -360,6 +375,19 @@ struct ShelfView: View {
                 onClose: { lastReport = nil }
             )
         }
+    }
+
+    /// 开机扫一遍在线书目录。只在书架出现时做一次，失败静默。
+    private func checkUpdates() async {
+        guard !isCheckingUpdates else { return }
+        isCheckingUpdates = true
+        defer { isCheckingUpdates = false }
+
+        let checker = UpdateChecker(online: env.onlineReading, books: env.books)
+        let updates = await checker.checkAll(limit: 12)
+        guard !updates.isEmpty else { return }
+        updateCount = updates.count
+        reload()
     }
 
     private func banner(icon: String,

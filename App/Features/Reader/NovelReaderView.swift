@@ -90,7 +90,7 @@ struct NovelReaderView: View {
                 } else if let error = model.errorMessage, model.pageRanges.isEmpty {
                     VStack(spacing: 10) {
                         EmptyStateView(symbol: "exclamationmark.triangle", title: "这一章没打开", message: error)
-                        if model.book.origin == .online {
+                        if model.book.origin == .remote {
                             Button("重试") { model.loadBodyIfNeeded(forceRefresh: true) }
                                 .buttonStyle(SecondaryButtonStyle(height: 40))
                                 .frame(width: 140)

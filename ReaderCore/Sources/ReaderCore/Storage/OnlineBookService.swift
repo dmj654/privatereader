@@ -54,7 +54,7 @@ public actor OnlineBookService {
         let book = Book(
             id: bookId,
             type: .novel,
-            origin: .online,
+            origin: .remote,
             title: detail.name,
             author: detail.author.isEmpty ? nil : detail.author,
             coverPath: nil,

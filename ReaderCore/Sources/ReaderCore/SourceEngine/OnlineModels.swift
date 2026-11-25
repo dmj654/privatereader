@@ -36,7 +36,7 @@ public struct OnlineBook: Equatable, Identifiable, Sendable {
 }
 
 /// 在线章节。和本地 `NovelChapter` 分开：这个只有名字和地址，正文要按需下载。
-public struct OnlineChapter: Equatable, Identifiable, Sendable {
+public struct OnlineChapter: Codable, Equatable, Identifiable, Sendable {
     public var name: String
     public var url: String
     public var updateTime: String

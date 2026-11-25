@@ -283,7 +283,7 @@ struct OnlineDetailView: View {
     private func findExisting() -> Book? {
         guard let all = try? env.books.all() else { return nil }
         return all.first {
-            $0.origin == .online
+            $0.origin == .remote
                 && $0.sourceId == online.sourceId
                 && $0.sourceUrl == online.bookUrl
         }

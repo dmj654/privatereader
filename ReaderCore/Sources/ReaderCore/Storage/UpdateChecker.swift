@@ -37,7 +37,7 @@ public struct UpdateChecker {
     }
 
     public func check(book: Book) async -> BookUpdate? {
-        guard book.origin == .online else { return nil }
+        guard book.origin == .remote else { return nil }
         do {
             let added = try await online.refreshToc(for: book)
             let manifest = try online.manifest(for: book)
@@ -69,7 +69,7 @@ public struct UpdateChecker {
     /// - Parameter limit: 一次最多扫几本，避免书架有几百本时开机等太久。
     public func checkAll(limit: Int = 20, concurrency: Int = 4) async -> [BookUpdate] {
         guard let all = try? books.all() else { return [] }
-        let targets = Array(all.filter { $0.origin == .online && $0.sourceId != nil }.prefix(limit))
+        let targets = Array(all.filter { $0.origin == .remote && $0.sourceId != nil }.prefix(limit))
         guard !targets.isEmpty else { return [] }
 
         var results: [BookUpdate] = []

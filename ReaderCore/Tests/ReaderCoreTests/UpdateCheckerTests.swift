@@ -59,7 +59,7 @@ final class UpdateCheckerTests: XCTestCase {
         return "<div id=\"list\"><dl>\(items)</dl></div>"
     }
 
-    private func makeBook(id: String = "online-1", origin: BookOrigin = .online, count: Int = 3) throws -> Book {
+    private func makeBook(id: String = "online-1", origin: BookOrigin = .remote, count: Int = 3) throws -> Book {
         let manifest = OnlineManifest(
             bookId: id,
             sourceId: "https://example.com",
@@ -75,9 +75,9 @@ final class UpdateCheckerTests: XCTestCase {
             type: .novel,
             origin: origin,
             title: "书\(id)",
-            filePath: origin == .online ? relative : nil,
-            sourceId: origin == .online ? "https://example.com" : nil,
-            sourceUrl: origin == .online ? "https://example.com/book/1" : nil,
+            filePath: origin == .remote ? relative : nil,
+            sourceId: origin == .remote ? "https://example.com" : nil,
+            sourceUrl: origin == .remote ? "https://example.com/book/1" : nil,
             chapterCount: count
         )
         try books.insert(book)

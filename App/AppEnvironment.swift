@@ -15,6 +15,7 @@ final class AppEnvironment: ObservableObject {
     let sessions: SessionRepository
     let cache: CacheRepository
     let sourceClient: SourceClient
+    let onlineReading: OnlineReadingService
     let library: LibraryService
     let chapterProvider: ChapterProvider
     let importLog: ImportLog
@@ -51,6 +52,7 @@ final class AppEnvironment: ObservableObject {
             sources: SourceRepository(db: database.writer),
             client: sourceClient
         )
+        self.onlineReading = onlineReading
         self.chapterProvider = ChapterProvider(paths: paths, online: onlineReading)
         self.importLog = ImportLog(directory: paths.root)
         self.startupMessage = message

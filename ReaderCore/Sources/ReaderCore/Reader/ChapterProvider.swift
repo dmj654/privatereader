@@ -19,7 +19,7 @@ public final class ChapterProvider {
 
     public func chapters(for book: Book) throws -> [NovelChapter] {
         // 在线书每次都从清单读：正文缓存会变，不能把「空正文」缓存下来。
-        if book.origin == .online {
+        if book.origin == .remote {
             guard let online else { throw ImportError.unreadableFile(book.title) }
             return try online.chapters(for: book)
         }
@@ -58,7 +58,7 @@ public final class ChapterProvider {
 
     /// 取一章正文。本地书直接返回解析结果，在线书走「缓存优先 + 按需下载」。
     public func body(for book: Book, index: Int, forceRefresh: Bool = false) async throws -> String {
-        if book.origin == .online {
+        if book.origin == .remote {
             guard let online else { throw ImportError.unreadableFile(book.title) }
             return try await online.body(for: book, index: index, forceRefresh: forceRefresh)
         }
@@ -68,37 +68,37 @@ public final class ChapterProvider {
     }
 
     public func cachedBody(for book: Book, index: Int) -> String? {
-        guard book.origin == .online, let online else { return nil }
+        guard book.origin == .remote, let online else { return nil }
         return online.cachedBody(for: book, index: index)
     }
 
     public func prefetch(for book: Book, around index: Int) async {
-        guard book.origin == .online, let online else { return }
+        guard book.origin == .remote, let online else { return }
         await online.prefetch(for: book, around: index)
     }
 
     public func refreshToc(for book: Book) async throws -> Int {
-        guard book.origin == .online, let online else { return 0 }
+        guard book.origin == .remote, let online else { return 0 }
         return try await online.refreshToc(for: book)
     }
 
     public func cachedChapterIndices(for book: Book) -> [Int] {
-        guard book.origin == .online, let online else { return [] }
+        guard book.origin == .remote, let online else { return [] }
         return online.cachedChapterIndices(for: book)
     }
 
     public func cacheUsage(for book: Book) -> OnlineLibrary.CacheUsage? {
-        guard book.origin == .online, let online else { return nil }
+        guard book.origin == .remote, let online else { return nil }
         return online.cacheUsage(for: book)
     }
 
     public func clearCache(for book: Book) {
-        guard book.origin == .online, let online else { return }
+        guard book.origin == .remote, let online else { return }
         online.clearCache(for: book)
     }
 
     public func downloadAll(for book: Book) async throws -> Int {
-        guard book.origin == .online, let online else { return 0 }
+        guard book.origin == .remote, let online else { return 0 }
         return try await online.downloadAll(for: book)
     }
 

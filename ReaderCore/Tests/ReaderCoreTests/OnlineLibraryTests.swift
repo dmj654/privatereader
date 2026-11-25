@@ -43,7 +43,7 @@ final class OnlineLibraryTests: XCTestCase {
     func testLoadManifestFromBookFilePath() throws {
         let relative = try library.save(manifest())
         let book = Book(
-            id: "b1", type: .novel, origin: .online,
+            id: "b1", type: .novel, origin: .remote,
             title: "测试书", filePath: relative, chapterCount: 3
         )
         let loaded = try library.loadManifest(book: book)

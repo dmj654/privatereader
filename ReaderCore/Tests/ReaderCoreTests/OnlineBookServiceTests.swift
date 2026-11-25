@@ -90,7 +90,7 @@ final class OnlineBookServiceTests: XCTestCase {
 
         XCTAssertEqual(bundle.book.title, "剑来")
         XCTAssertEqual(bundle.book.author, "烽火戏诸侯")
-        XCTAssertEqual(bundle.book.origin, .online)
+        XCTAssertEqual(bundle.book.origin, .remote)
         XCTAssertEqual(bundle.book.sourceId, "s1")
         XCTAssertEqual(bundle.book.chapterCount, 2)
         XCTAssertEqual(bundle.manifest.chapters.map(\.name), ["第一章 惊蛰", "第二章 开门"])

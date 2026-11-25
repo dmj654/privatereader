@@ -77,7 +77,7 @@ final class OnlineReadingServiceTests: XCTestCase {
         let book = Book(
             id: "online-1",
             type: .novel,
-            origin: .online,
+            origin: .remote,
             title: "在线书",
             filePath: relative,
             sourceId: "https://example.com",
