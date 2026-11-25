@@ -72,6 +72,11 @@ struct NovelReaderView: View {
     /// 句末/跨章/在线章节加载都可能把它漏掉，这里统一补一次。
     @State private var speechResumeWork: DispatchWorkItem?
 
+    /// 连续点「上一句/下一句」时，只让最后一次真正开口。
+    /// 每点一次就 stop + speak，引擎来不及启动，听起来就是一跳一跳的。
+    @State private var pendingSentenceWork: DispatchWorkItem?
+    @State private var pendingSentenceText: String?
+
     init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
         _model = StateObject(wrappedValue: NovelReaderViewModel(
             book: book,

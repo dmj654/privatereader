@@ -6,14 +6,14 @@ import XCTest
 final class SourceFormatTests: XCTestCase {
 
     func testGBKEncodedJSONIsTolerated() throws {
-        let json = "[{\"bookSourceName\":\"GBK 源\",\"bookSourceUrl\":\"https://gbk.example\"}]"
+        let json = "[{\"bookSourceName\":\"GBK 书源\",\"bookSourceUrl\":\"https://gbk.example\"}]"
         guard let data = json.data(using: TextDecoder.gb18030) else {
             return XCTFail("无法生成 GBK 数据")
         }
 
         let sources = try LegadoParser.parse(data: data)
 
-        XCTAssertEqual(sources.first?.name, "GBK 源")
+        XCTAssertEqual(sources.first?.name, "GBK 书源")
     }
 
     func testJSONLinesAreTolerated() throws {
