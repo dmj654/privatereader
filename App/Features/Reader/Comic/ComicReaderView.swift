@@ -290,6 +290,11 @@ struct ZoomablePageView: UIViewRepresentable {
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         context.coordinator.imageView?.image = UIImage(cgImage: image)
         context.coordinator.layoutIfNeeded(size: scroll.bounds.size, fit: fit)
+        // updateUIView 可能发生在 SwiftUI 完成布局之前，此时 bounds 还是 0，
+        // 布局会被 guard 掉。下一个 runloop 再试一次，图才画得出来。
+        DispatchQueue.main.async {
+            context.coordinator.layoutIfNeeded(size: scroll.bounds.size, fit: fit)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
