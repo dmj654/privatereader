@@ -220,4 +220,68 @@ final class SourceClientTests: XCTestCase {
         XCTAssertEqual(SourceClient.parseHeader(nil).isEmpty, true)
         XCTAssertEqual(SourceClient.parseHeader("不是 JSON").isEmpty, true)
     }
+
+    // MARK: 发现
+
+    private func exploreSource() -> LegadoSource {
+        LegadoSource(
+            id: "s1",
+            name: "发现源",
+            url: "https://example.com",
+            exploreUrl: "周榜::https://example.com/week?page={{page}}\n分类&&/sort/1",
+            ruleExplore: SearchRule(
+                bookList: ".item",
+                name: ".title@text",
+                author: ".author@text",
+                bookUrl: ".title@href"
+            )
+        )
+    }
+
+    func testCategoriesParseBothSeparators() {
+        let categories = makeClient().categories(source: exploreSource())
+
+        XCTAssertEqual(categories.map(\.name), ["周榜", "分类"])
+        XCTAssertEqual(categories[0].url, "https://example.com/week?page={{page}}")
+        XCTAssertEqual(categories[1].url, "/sort/1")
+    }
+
+    func testCategoriesEmptyWhenNoExploreUrl() {
+        let source = LegadoSource(id: "s", name: "无发现", url: "https://example.com")
+        XCTAssertTrue(makeClient().categories(source: source).isEmpty)
+    }
+
+    func testExploreParsesBookListAndReplacesPage() async throws {
+        MockURLProtocol.routes = [
+            "/week": (200, Data("""
+            <div class="item"><a class="title" href="/b/1">书一</a><span class="author">作者一</span></div>
+            <div class="item"><a class="title" href="/b/2">书二</a><span class="author">作者二</span></div>
+            """.utf8), "text/html; charset=utf-8")
+        ]
+        defer { MockURLProtocol.routes = [:] }
+
+        let books = try await makeClient().explore(
+            source: exploreSource(),
+            category: ExploreCategory(name: "周榜", url: "https://example.com/week?page={{page}}"),
+            page: 2
+        )
+
+        XCTAssertEqual(books.map(\.name), ["书一", "书二"])
+        XCTAssertEqual(books[0].bookUrl, "https://example.com/b/1")
+        XCTAssertTrue(MockURLProtocol.lastRequest?.url?.query?.contains("page=2") == true,
+                      "页码要替换进分类地址")
+    }
+
+    func testExploreWithoutRuleThrows() async {
+        let source = LegadoSource(id: "s", name: "空", url: "https://example.com")
+        do {
+            _ = try await makeClient().explore(
+                source: source,
+                category: ExploreCategory(name: "全部", url: "https://example.com/all")
+            )
+            XCTFail("没有发现规则应当报错")
+        } catch {
+            // 预期
+        }
+    }
 }

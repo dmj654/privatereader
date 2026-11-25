@@ -69,7 +69,7 @@ final class StatsServiceTests: XCTestCase {
         let stats = try service.stats(now: now)
 
         XCTAssertEqual(stats.weekSeconds, 900, "本周从周一（11/23）算起")
-        XCTAssertEqual(stats.monthSeconds, 2100, "本月从 11/1 算起")
+        XCTAssertEqual(stats.monthSeconds, 3000, "本月从 11/1 算起：600+300+900+1200")
         XCTAssertEqual(stats.dailyAverageSeconds, 128, "900 / 7 向下取整")
     }
 

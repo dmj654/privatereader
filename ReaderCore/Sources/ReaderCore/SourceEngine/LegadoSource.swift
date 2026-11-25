@@ -17,6 +17,8 @@ public struct LegadoSource: Equatable, Identifiable, Sendable {
     public var searchUrl: String
     public var exploreUrl: String?
     public var ruleSearch: SearchRule
+    /// 发现页规则。结构与搜索一致，只是入口地址来自 exploreUrl 里的分类。
+    public var ruleExplore: SearchRule
     public var ruleBookInfo: BookInfoRule
     public var ruleToc: TocRule
     public var ruleContent: ContentRule
@@ -31,6 +33,7 @@ public struct LegadoSource: Equatable, Identifiable, Sendable {
                 searchUrl: String = "",
                 exploreUrl: String? = nil,
                 ruleSearch: SearchRule = SearchRule(),
+                ruleExplore: SearchRule = SearchRule(),
                 ruleBookInfo: BookInfoRule = BookInfoRule(),
                 ruleToc: TocRule = TocRule(),
                 ruleContent: ContentRule = ContentRule(),
@@ -44,6 +47,7 @@ public struct LegadoSource: Equatable, Identifiable, Sendable {
         self.searchUrl = searchUrl
         self.exploreUrl = exploreUrl
         self.ruleSearch = ruleSearch
+        self.ruleExplore = ruleExplore
         self.ruleBookInfo = ruleBookInfo
         self.ruleToc = ruleToc
         self.ruleContent = ruleContent

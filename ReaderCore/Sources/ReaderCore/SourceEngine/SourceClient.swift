@@ -36,8 +36,11 @@ public actor SourceClient {
         let html = try await fetch(url, source: source)
         let items = RuleRunner.elements(source.ruleSearch.bookList, html: html, baseUrl: source.url)
 
-        return items.compactMap { item in
-            let rule = source.ruleSearch
+        return map(items, rule: source.ruleSearch, source: source)
+    }
+
+    private func map(_ items: [String], rule: SearchRule, source: LegadoSource) -> [OnlineBook] {
+        items.compactMap { item in
             let name = RuleRunner.string(rule.name, html: item, baseUrl: source.url)
             guard !name.isEmpty else { return nil }
             return OnlineBook(
@@ -55,6 +58,37 @@ public actor SourceClient {
                 )
             )
         }
+    }
+
+    // MARK: 发现
+
+    /// 从 exploreUrl 里拆出「分类名 :: 地址」。legado 用换行分隔，
+    /// 也有源写成 `&&`，两种都认。
+    public nonisolated func categories(source: LegadoSource) -> [ExploreCategory] {
+        guard let raw = source.exploreUrl, !raw.isEmpty else { return [] }
+        let normalized = raw.replacingOccurrences(of: "&&", with: "\n")
+        return normalized.components(separatedBy: .newlines).compactMap { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return nil }
+            let parts = trimmed.components(separatedBy: "::")
+            guard parts.count >= 2 else { return nil }
+            let name = parts[0].trimmingCharacters(in: .whitespaces)
+            let url = parts.dropFirst().joined(separator: "::").trimmingCharacters(in: .whitespaces)
+            guard !url.isEmpty else { return nil }
+            return ExploreCategory(name: name.isEmpty ? "全部" : name, url: url)
+        }
+    }
+
+    public func explore(source: LegadoSource,
+                        category: ExploreCategory,
+                        page: Int = 1) async throws -> [OnlineBook] {
+        guard !source.ruleExplore.bookList.isEmpty else {
+            throw SourceError.emptyRule("发现列表")
+        }
+        let url = category.url.replacingOccurrences(of: "{{page}}", with: "\(page)")
+        let html = try await fetch(url, source: source)
+        let items = RuleRunner.elements(source.ruleExplore.bookList, html: html, baseUrl: source.url)
+        return map(items, rule: source.ruleExplore, source: source)
     }
 
     // MARK: 详情

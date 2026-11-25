@@ -37,6 +37,7 @@ struct DiscoverView: View {
                     } else {
                         sourceCard
                         searchHint
+                        ExploreSection()
                     }
 
                     rulesCard

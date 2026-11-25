@@ -72,6 +72,7 @@ public enum LegadoParser {
         let raw = rawJSONString(dict)
 
         let search = dictValue(dict, "ruleSearch")
+        let explore = dictValue(dict, "ruleExplore")
         let info = dictValue(dict, "ruleBookInfo")
         let toc = dictValue(dict, "ruleToc")
         let content = dictValue(dict, "ruleContent")
@@ -95,6 +96,17 @@ public enum LegadoParser {
                 intro: string(search, "intro"),
                 coverUrl: string(search, "coverUrl"),
                 bookUrl: string(search, "bookUrl")
+            ),
+            ruleExplore: SearchRule(
+                bookList: string(explore, "bookList"),
+                name: string(explore, "name"),
+                author: string(explore, "author"),
+                kind: string(explore, "kind"),
+                wordCount: string(explore, "wordCount"),
+                lastChapter: string(explore, "lastChapter"),
+                intro: string(explore, "intro"),
+                coverUrl: string(explore, "coverUrl"),
+                bookUrl: string(explore, "bookUrl")
             ),
             ruleBookInfo: BookInfoRule(
                 name: string(info, "name"),

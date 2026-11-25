@@ -35,6 +35,19 @@ public struct OnlineBook: Equatable, Identifiable, Sendable {
     }
 }
 
+/// 发现页的一个入口（周榜、分类、全部…）。
+public struct ExploreCategory: Equatable, Identifiable, Sendable {
+    public var name: String
+    public var url: String
+
+    public var id: String { "\(name)|\(url)" }
+
+    public init(name: String, url: String) {
+        self.name = name
+        self.url = url
+    }
+}
+
 /// 在线章节。和本地 `NovelChapter` 分开：这个只有名字和地址，正文要按需下载。
 public struct OnlineChapter: Codable, Equatable, Identifiable, Sendable {
     public var name: String
