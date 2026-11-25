@@ -131,7 +131,6 @@ struct NovelReaderView: View {
             }
             // 退出时整页（包括菜单）一起走，才有"被推回去"的实感
             .offset(x: exitOffset)
-            .simultaneousGesture(edgeExitGesture)
             .statusBarHidden(model.isMenuVisible == false && !editingZones)
             .onAppear { viewWidth = proxy.size.width }
             .onChange(of: proxy.size) { viewWidth = $0.width }
@@ -453,9 +452,19 @@ struct NovelReaderView: View {
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
-                guard !model.isMenuVisible, !editingZones else { return }
-                guard !startsAtLeftEdge(value) else { return }
+                guard !editingZones else { return }
 
+                // 边缘退出优先于翻页：从最左侧往右，整页跟着走。
+                if isEdgeExit || startsAtLeftEdge(value) {
+                    isEdgeExit = true
+                    // 退出优先：把可能正在进行的翻页动画收掉，画面才不会抖
+                    incomingText = nil
+                    contentOffset = 0
+                    exitOffset = max(0, min(value.translation.width, max(viewWidth, 1)))
+                    return
+                }
+
+                guard !model.isMenuVisible else { return }
                 guard prefs.pageTurn == .follow || prefs.pageTurn == .slide else { return }
                 guard abs(value.translation.width) > abs(value.translation.height) else { return }
 
@@ -475,6 +484,10 @@ struct NovelReaderView: View {
                 }
             }
             .onEnded { value in
+                if isEdgeExit {
+                    finishEdgeExit(value)
+                    return
+                }
                 guard !model.isMenuVisible, !editingZones else {
                     snapBack()
                     return
@@ -832,8 +845,7 @@ struct NovelReaderView: View {
             return
         }
         if let text = model.rewindSpeechText() {
-            speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
-            speech.speak(text)
+            scheduleSentence(text)
         }
     }
 
@@ -843,12 +855,25 @@ struct NovelReaderView: View {
             return
         }
         if let text = model.advanceSpeechText(respectsManualMove: false) {
+            scheduleSentence(text)
+        } else if let next = model.beginNextChapterForSpeech(respectsManualMove: false) {
+            scheduleSentence(next)
+        }
+    }
+
+    /// 连点合并：高亮立刻跟着走，声音只发最后一次，避免引擎被连续打断。
+    private func scheduleSentence(_ text: String) {
+        pendingSentenceText = text
+        pendingSentenceWork?.cancel()
+
+        let work = DispatchWorkItem {
+            guard let text = pendingSentenceText else { return }
+            pendingSentenceText = nil
             speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
             speech.speak(text)
-        } else if let next = model.beginNextChapterForSpeech(respectsManualMove: false) {
-            speech.updateMetadata(title: model.book.title, subtitle: model.chapterTitle)
-            speech.speak(next)
         }
+        pendingSentenceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
     }
 
     private func toggleSpeechPlayback() {
@@ -907,6 +932,7 @@ struct NovelReaderView: View {
             bottomPanel
         }
         .transition(.opacity)
+        .simultaneousGesture(edgeExitGesture)
     }
 
     /// 听书模式的菜单：只有底部朗读面板，没有顶栏和侧栏。
@@ -917,6 +943,7 @@ struct NovelReaderView: View {
             speechPanel
         }
         .transition(.opacity)
+        .simultaneousGesture(edgeExitGesture)
     }
 
     // MARK: 朗读面板

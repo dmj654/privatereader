@@ -77,6 +77,27 @@ struct SourceImportSheet: View {
             ) { result in
                 handleFile(result)
             }
+            .overlay {
+                if isImporting {
+                    ZStack {
+                        Color.black.opacity(0.12).ignoresSafeArea()
+                        VStack(spacing: 10) {
+                            ProgressView().tint(Palette.accent)
+                            Text("正在导入，请稍候…")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Palette.ink)
+                            Text("几千条书源需要十几秒")
+                                .font(Typo.micro)
+                                .foregroundStyle(Palette.ink3)
+                        }
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 18)
+                        .background(Palette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .shadow(color: Shadow.card, radius: 8, y: 3)
+                    }
+                }
+            }
             .alert("导入失败", isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
@@ -225,7 +246,14 @@ struct SourceImportSheet: View {
     private func handleFile(_ result: Result<[URL], Error>) {
         do {
             guard let url = try result.get().first else { return }
-            let data = try readPicked(url)
+            var data = try readPicked(url)
+            if SourceArchive.looksLikeZip(data) {
+                guard let json = SourceArchive.jsonData(from: data) else {
+                    errorMessage = "这个压缩包里没有 .json 书源文件。"
+                    return
+                }
+                data = json
+            }
             importData(data)
         } catch {
             errorMessage = "读取文件失败：\(error.localizedDescription)\n可以在「文件」里先拷到本机再试，或直接粘贴内容。"
@@ -271,9 +299,19 @@ struct SourceImportSheet: View {
             do {
                 var request = URLRequest(url: url)
                 request.timeoutInterval = 30
-                let (data, response) = try await URLSession.shared.data(for: request)
+                // 不少源站会拒绝没有 UA 的请求
+                request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+                                 + "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
+                                 forHTTPHeaderField: "User-Agent")
+                var (data, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
                     throw URLError(.badServerResponse)
+                }
+                if SourceArchive.looksLikeZip(data) {
+                    guard let json = SourceArchive.jsonData(from: data) else {
+                        throw LegadoParserError.invalidJSON
+                    }
+                    data = json
                 }
                 await MainActor.run {
                     isImporting = false
@@ -296,6 +334,7 @@ struct SourceImportSheet: View {
 
         let repo = env.sources
         let force = forceEnable
+        env.importLog.append("书源导入开始：\(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file))")
 
         Task {
             do {
@@ -306,12 +345,15 @@ struct SourceImportSheet: View {
                     isImporting = false
                     summary = result
                     text = ""
+                    env.importLog.append("书源导入完成：新增 \(result.added)，覆盖 \(result.updated)")
                     onImported(result)
                 }
             } catch {
                 await MainActor.run {
                     isImporting = false
-                    errorMessage = readable(error)
+                    let message = readable(error)
+                    env.importLog.append("书源导入失败：\(message)")
+                    errorMessage = message
                 }
             }
         }

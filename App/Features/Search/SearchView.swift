@@ -3,6 +3,7 @@ import ReaderCore
 
 struct SearchView: View {
     @EnvironmentObject private var env: AppEnvironment
+    @EnvironmentObject private var router: TabRouter
     @StateObject private var model = SearchViewModel()
     @FocusState private var keyboardFocus: Bool
 
@@ -17,7 +18,11 @@ struct SearchView: View {
         }
         .navigationTitle("搜索")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { keyboardFocus = model.query.isEmpty }
+        // 不要 onAppear 就 focus：四个 Tab 在启动时都会建出来，
+        // 隐藏的搜索页一抢焦点，进 App 就弹输入法。
+        .onChange(of: router.selection) { tab in
+            keyboardFocus = (tab == .search && model.query.isEmpty && model.groups.isEmpty)
+        }
     }
 
     // MARK: 搜索框

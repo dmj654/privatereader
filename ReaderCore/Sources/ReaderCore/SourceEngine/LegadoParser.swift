@@ -32,31 +32,16 @@ public enum LegadoParser {
         if data.starts(with: [0xEF, 0xBB, 0xBF]) {
             data = data.dropFirst(3)
         }
-        guard let root = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
-            throw LegadoParserError.invalidJSON
-        }
 
-        let dicts: [[String: Any]]
-        if let array = root as? [[String: Any]] {
-            dicts = array
-        } else if let single = root as? [String: Any] {
-            // 有些导出包会套一层：{"bookSources": [...]}
-            if let nested = single["bookSources"] as? [[String: Any]] {
-                dicts = nested
-            } else if let nested = single["data"] as? [[String: Any]] {
-                dicts = nested
-            } else {
-                dicts = [single]
-            }
-        } else {
-            throw LegadoParserError.invalidJSON
-        }
-
+        let dicts = try extractDicts(from: data)
         var result: [LegadoSource] = []
         var seen = Set<String>()
 
         for (index, dict) in dicts.enumerated() {
-            guard let source = source(from: dict, index: index) else { continue }
+            // 每条源都有一份规则字符串，逐条回收临时对象，几千条时峰值内存能降一半
+            guard let source = autoreleasepool(invoking: { source(from: dict, index: index) }) else {
+                continue
+            }
             // 同一个 URL 只留第一条：不少合集里会重复收录
             guard seen.insert(source.id).inserted else { continue }
             result.append(source)
@@ -64,6 +49,64 @@ public enum LegadoParser {
 
         guard !result.isEmpty else { throw LegadoParserError.empty }
         return result
+    }
+
+    /// 把各种常见导出形态统一成「一组字典」。
+    ///
+    /// 网友分享的源不止标准数组一种：有套 `bookSources` 的、有按 URL 建索引的、
+    /// 有一行一条的 JSONL，还有 Windows 工具存成 GBK 的。
+    private static func extractDicts(from data: Data) throws -> [[String: Any]] {
+        if let root = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+           let dicts = flatten(root) {
+            return dicts
+        }
+
+        // 编码兜底：GBK / UTF-16 的 JSON，先转成 UTF-8 再解析
+        if let decoded = TextDecoder.decode(data),
+           let converted = decoded.text.data(using: .utf8),
+           converted != data,
+           let root = try? JSONSerialization.jsonObject(with: converted, options: [.fragmentsAllowed]),
+           let dicts = flatten(root) {
+            return dicts
+        }
+
+        // JSON Lines：一行一条源，整份不是合法 JSON 数组
+        if let decoded = TextDecoder.decode(data) {
+            let lines = decoded.text
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            if lines.count > 1 {
+                let dicts = lines.compactMap { line -> [String: Any]? in
+                    guard let lineData = line.data(using: .utf8),
+                          let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                        return nil
+                    }
+                    return object
+                }
+                if !dicts.isEmpty { return dicts }
+            }
+        }
+
+        throw LegadoParserError.invalidJSON
+    }
+
+    private static func flatten(_ root: Any) -> [[String: Any]]? {
+        if let array = root as? [[String: Any]] { return array }
+        guard let single = root as? [String: Any] else { return nil }
+
+        if let nested = single["bookSources"] as? [[String: Any]] { return nested }
+        if let nested = single["data"] as? [[String: Any]] { return nested }
+
+        // {"https://a.example": {...}, "https://b.example": {...}}
+        let values = single.values.compactMap { $0 as? [String: Any] }
+        if values.count == single.count,
+           !values.isEmpty,
+           values.allSatisfy({ $0["bookSourceName"] != nil || $0["bookSourceUrl"] != nil }) {
+            return values
+        }
+
+        return [single]
     }
 
     // MARK: 单条

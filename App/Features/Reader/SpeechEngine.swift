@@ -559,12 +559,19 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         DispatchQueue.main.async {
+            let generation = self.utteranceGenerations.removeValue(
+                forKey: ObjectIdentifier(utterance)
+            )
+            // 连续点「下一句」时，前一条的取消通知会晚到。
+            // 它既不能改当前状态，也不能触发重念，否则会和最新一句打架——
+            // 表现就是连点几次之后声音断掉或卡住。
+            guard generation == self.speechGeneration else { return }
+
             // 我们主动打断换句：这条 cancel 是预期的，不要重念
             if utterance === self.interruptingUtterance {
                 self.interruptingUtterance = nil
                 return
             }
-            self.utteranceGenerations.removeValue(forKey: ObjectIdentifier(utterance))
             guard utterance === self.currentUtterance else { return }
             self.isSpeaking = false
             self.isPaused = false
