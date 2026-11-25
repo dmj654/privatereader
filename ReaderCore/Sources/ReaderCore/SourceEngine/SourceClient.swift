@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 
 /// 书源网络层：搜索 / 详情 / 目录 / 正文。
 ///
@@ -190,17 +191,25 @@ public actor SourceClient {
         if let doc = try? SwiftSoup.parse(raw),
            let images = try? doc.select("img").array(),
            !images.isEmpty {
-            return images.compactMap { element in
-                let candidates = [
-                    (try? element.attr("src")) ?? "",
-                    (try? element.attr("data-src")) ?? "",
-                    (try? element.attr("data-original")) ?? ""
-                ]
-                guard let chosen = candidates.first(where: {
-                    !$0.isEmpty && !$0.hasPrefix("data:")
-                }) else { return nil }
-                return RuleRunner.resolveURL(chosen, baseUrl: base)
+            var result: [String] = []
+            for element in images {
+                let src = (try? element.attr("src")) ?? ""
+                let lazy = (try? element.attr("data-src")) ?? ""
+                let original = (try? element.attr("data-original")) ?? ""
+
+                var chosen = ""
+                if !src.isEmpty, !src.hasPrefix("data:") {
+                    chosen = src
+                } else if !lazy.isEmpty {
+                    chosen = lazy
+                } else if !original.isEmpty {
+                    chosen = original
+                }
+                if !chosen.isEmpty {
+                    result.append(RuleRunner.resolveURL(chosen, baseUrl: base))
+                }
             }
+            return result
         }
 
         // 规则直接返回地址：换行 / 逗号 / 空格分隔
