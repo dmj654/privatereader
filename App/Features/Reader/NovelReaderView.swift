@@ -76,6 +76,8 @@ struct NovelReaderView: View {
     /// 每点一次就 stop + speak，引擎来不及启动，听起来就是一跳一跳的。
     @State private var pendingSentenceWork: DispatchWorkItem?
     @State private var pendingSentenceText: String?
+    /// 上一次手动切句的时间。恢复看护在这之后 1.2 秒内不抢话。
+    @State private var lastSentenceCommandAt: TimeInterval = 0
 
     init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
         _model = StateObject(wrappedValue: NovelReaderViewModel(
@@ -460,7 +462,7 @@ struct NovelReaderView: View {
                 guard !editingZones else { return }
 
                 // 边缘退出优先于翻页：从最左侧往右，整页跟着走。
-                if isEdgeExit || startsAtLeftEdge(value) {
+                if canEdgeExit, isEdgeExit || startsAtLeftEdge(value) {
                     isEdgeExit = true
                     // 退出优先：把可能正在进行的翻页动画收掉，画面才不会抖
                     incomingText = nil
@@ -544,7 +546,7 @@ struct NovelReaderView: View {
     private var edgeExitGesture: some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { value in
-                guard !editingZones else { return }
+                guard !editingZones, canEdgeExit else { return }
                 guard isEdgeExit || startsAtLeftEdge(value) else { return }
                 isEdgeExit = true
                 exitOffset = max(0, min(value.translation.width, max(viewWidth, 1)))
@@ -553,6 +555,12 @@ struct NovelReaderView: View {
                 guard isEdgeExit else { return }
                 finishEdgeExit(value)
             }
+    }
+
+    /// 只有「阅读菜单打开」或「听书模式」才允许边缘退出。
+    /// 纯阅读时不退出——那时候从左边滑应该是翻上一页。
+    private var canEdgeExit: Bool {
+        mode == .listening || model.isMenuVisible
     }
 
     /// 起点在屏幕最左侧 30pt 内、向右拖。
@@ -784,6 +792,9 @@ struct NovelReaderView: View {
     private func followSpeechAfterManualMove() {
         guard model.isSpeechPrepared else { return }
 
+        // 翻页优先：把还没开口的"下一句"撤掉，避免翻完页又念回旧位置
+        pendingSentenceWork?.cancel()
+        pendingSentenceText = nil
         speechRealignWork?.cancel()
         let work = DispatchWorkItem {
             guard model.isSpeechPrepared else { return }
@@ -802,6 +813,8 @@ struct NovelReaderView: View {
     /// 1.1 秒还没开口就重新对齐当前页；在线章节正在下载则等下载完再试。
     private func scheduleSpeechResumeCheck(after delay: TimeInterval = 1.1) {
         guard model.isSpeechPrepared, speech.isActive, !speech.isPaused else { return }
+        // 用户正在连续切句：别用"从页首重念"去抢他刚选的句子
+        guard Date().timeIntervalSince1970 - lastSentenceCommandAt > 1.2 else { return }
 
         speechResumeWork?.cancel()
         let work = DispatchWorkItem {
@@ -849,6 +862,7 @@ struct NovelReaderView: View {
             restartListeningFromCurrentPage()
             return
         }
+        lastSentenceCommandAt = Date().timeIntervalSince1970
         if let text = model.rewindSpeechText() {
             scheduleSentence(text)
         }
@@ -859,6 +873,7 @@ struct NovelReaderView: View {
             restartListeningFromCurrentPage()
             return
         }
+        lastSentenceCommandAt = Date().timeIntervalSince1970
         if let text = model.advanceSpeechText(respectsManualMove: false) {
             scheduleSentence(text)
         } else if let next = model.beginNextChapterForSpeech(respectsManualMove: false) {
@@ -878,7 +893,7 @@ struct NovelReaderView: View {
             speech.speak(text)
         }
         pendingSentenceWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
     }
 
     private func toggleSpeechPlayback() {

@@ -71,6 +71,16 @@ final class SourceFormatTests: XCTestCase {
         XCTAssertEqual(parsed.first?.name, "压缩包源")
     }
 
+    func testURLCommentSuffixIsStripped() throws {
+        let json = "[{\"bookSourceName\":\"漫画源\",\"bookSourceUrl\":\"https://comic.example##漫画\",\"bookSourceType\":2}]"
+
+        let sources = try LegadoParser.parse(data: Data(json.utf8))
+
+        XCTAssertEqual(sources.first?.url, "https://comic.example")
+        XCTAssertEqual(sources.first?.id, "https://comic.example")
+        XCTAssertEqual(sources.first?.type, 2)
+    }
+
     func testBOMAndWhitespaceAreTolerated() throws {
         let json = "\n  [{\"bookSourceName\":\"前后空白\",\"bookSourceUrl\":\"https://space.example\"}]\n"
         var data = Data([0xEF, 0xBB, 0xBF])

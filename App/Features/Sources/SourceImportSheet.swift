@@ -69,13 +69,13 @@ struct SourceImportSheet: View {
                     .disabled(isImporting || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            .fileImporter(
-                isPresented: $showingFilePicker,
-                // 网盘/微信发来的文件经常只标成 public.data，限制太严会灰掉选不中
-                allowedContentTypes: [.json, .plainText, .text, .data, .item],
-                allowsMultipleSelection: false
-            ) { result in
-                handleFile(result)
+            .sheet(isPresented: $showingFilePicker) {
+                // 用 UIKit 的 asCopy 模式：微信/网盘的文件先拷进 App 再读，
+                // SwiftUI 的 fileImporter 在这些 provider 上常常点了没反应。
+                LegadoDocumentPicker { url in
+                    showingFilePicker = false
+                    handlePickedURL(url)
+                }
             }
             .overlay {
                 if isImporting {
@@ -243,10 +243,10 @@ struct SourceImportSheet: View {
 
     // MARK: 动作
 
-    private func handleFile(_ result: Result<[URL], Error>) {
+    private func handlePickedURL(_ url: URL) {
         do {
-            guard let url = try result.get().first else { return }
-            var data = try readPicked(url)
+            // asCopy 模式下 URL 已在 App 沙盒内，直接读即可
+            var data = try Data(contentsOf: url)
             if SourceArchive.looksLikeZip(data) {
                 guard let json = SourceArchive.jsonData(from: data) else {
                     errorMessage = "这个压缩包里没有 .json 书源文件。"
@@ -254,27 +254,11 @@ struct SourceImportSheet: View {
                 }
                 data = json
             }
+            env.importLog.append("已选择文件：\(url.lastPathComponent)，\(data.count) 字节")
             importData(data)
         } catch {
-            errorMessage = "读取文件失败：\(error.localizedDescription)\n可以在「文件」里先拷到本机再试，或直接粘贴内容。"
+            errorMessage = "读取文件失败：\(error.localizedDescription)"
         }
-    }
-
-    /// 文件 App / 网盘给的 URL 必须走协调读，直接 Data(contentsOf:) 有时拿不到权限。
-    private func readPicked(_ url: URL) throws -> Data {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
-        var coordinationError: NSError?
-        var readResult: Result<Data, Error>?
-        NSFileCoordinator().coordinate(readingItemAt: url,
-                                       options: [.withoutChanges],
-                                       error: &coordinationError) { readURL in
-            readResult = Result { try Data(contentsOf: readURL) }
-        }
-        if let coordinationError { throw coordinationError }
-        guard let readResult else { throw CocoaError(.fileReadUnknown) }
-        return try readResult.get()
     }
 
     private func importText() {

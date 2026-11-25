@@ -113,7 +113,10 @@ public enum LegadoParser {
 
     private static func source(from dict: [String: Any], index: Int) -> LegadoSource? {
         let name = string(dict, "bookSourceName").trimmingCharacters(in: .whitespacesAndNewlines)
-        let url = string(dict, "bookSourceUrl").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawURL = string(dict, "bookSourceUrl").trimmingCharacters(in: .whitespacesAndNewlines)
+        // 老式分享会在地址后附 "##分组/备注"，真正能请求的只有前半段
+        let url = rawURL.components(separatedBy: "##").first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? rawURL
         // 名字和地址都空的条目没有意义，通常是占位项
         guard !name.isEmpty || !url.isEmpty else { return nil }
 

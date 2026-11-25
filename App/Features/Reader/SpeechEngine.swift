@@ -290,6 +290,7 @@ final class SpeechEngine: NSObject, ObservableObject {
     // MARK: 音频中断
 
     private func observeAudioSession() {
+        isSessionActive = false
         let center = NotificationCenter.default
         center.addObserver(self,
                            selector: #selector(handleInterruption(_:)),
@@ -309,6 +310,7 @@ final class SpeechEngine: NSObject, ObservableObject {
         case .began:
             // 系统已接管音频；这里只做标记，主动 stop 反而更难恢复
             wasInterrupted = true
+            isSessionActive = false
         case .ended:
             guard wasInterrupted else { return }
             wasInterrupted = false
@@ -412,9 +414,13 @@ final class SpeechEngine: NSObject, ObservableObject {
         UIApplication.shared.beginReceivingRemoteControlEvents()
     }
 
+    private var isSessionActive = false
+
     private func activateAudioSession() {
+        guard !isSessionActive else { return }
         do {
             try AVAudioSession.sharedInstance().setActive(true)
+            isSessionActive = true
         } catch {
             // 激活失败通常是被别的 App 占着；下一次 speak 还会再试
         }
