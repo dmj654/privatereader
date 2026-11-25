@@ -123,9 +123,19 @@ public enum ImageDownsampler {
     /// 再把它当作最长边交给 ImageIO，输出宽度正好落在目标上。
     public static func downsampleWidth(url: URL, targetWidth: Int) -> CGImage? {
         guard let size = pixelSize(of: url), size.width > 0, size.height > 0 else { return nil }
-        let width = min(CGFloat(max(targetWidth, 64)), size.width)
-        let ratio = width / size.width
-        let height = size.height * ratio
+        var width = min(CGFloat(max(targetWidth, 64)), size.width)
+        var ratio = width / size.width
+        var height = size.height * ratio
+
+        // 超长条漫（高度几万像素）整张解码会吃掉上百 MB。把最长边压到 16000：
+        // 宽度会相应变窄，但一屏里仍然能看清，内存不会炸。
+        let maxHeight: CGFloat = 16000
+        if height > maxHeight {
+            height = maxHeight
+            ratio = height / size.height
+            width = size.width * ratio
+        }
+
         let longest = Int(max(width, height))
         return downsample(url: url, maxPixelSize: longest)
     }

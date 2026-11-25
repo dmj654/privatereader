@@ -177,6 +177,13 @@ final class NovelReaderViewModel: ObservableObject {
                 }
                 isContentLoading = false
                 Task { await provider.prefetch(for: book, around: index) }
+                // 加载期间用户又跳到了别的章：这一章的请求被 isContentLoading 挡掉了，
+                // 现在补一次，否则会停在空白页。
+                if index != chapterIndex,
+                   chapters.indices.contains(chapterIndex),
+                   chapters[chapterIndex].body.isEmpty {
+                    loadBodyIfNeeded()
+                }
             } catch {
                 isContentLoading = false
                 if index == chapterIndex {
@@ -187,6 +194,9 @@ final class NovelReaderViewModel: ObservableObject {
                         text += "\n这一章还没缓存。已缓存 \(cached.count) 章，可以在目录里选已缓存的章节离线阅读。"
                     }
                     errorMessage = text
+                } else if chapters.indices.contains(chapterIndex),
+                          chapters[chapterIndex].body.isEmpty {
+                    loadBodyIfNeeded()
                 }
             }
         }
