@@ -819,10 +819,15 @@ struct NovelReaderView: View {
         speechResumeWork?.cancel()
         let work = DispatchWorkItem {
             guard model.isSpeechPrepared, speech.isActive, !speech.isPaused else { return }
-            guard !speech.isSpeaking else { return }
 
             if model.isContentLoading {
                 scheduleSpeechResumeCheck(after: 0.8)
+                return
+            }
+            // 正在念就交给引擎自己的进度看门狗，别插话；
+            // 刚念完不足 1.2 秒也别急着重念——"就回去了。"这种短句会被读第二遍。
+            guard !speech.isSpeaking, speech.idleSeconds > 1.2 else {
+                scheduleSpeechResumeCheck(after: 0.6)
                 return
             }
             if let text = model.realignSpeechToCurrentPage() {

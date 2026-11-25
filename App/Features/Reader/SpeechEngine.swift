@@ -53,6 +53,10 @@ final class SpeechEngine: NSObject, ObservableObject {
     /// 用户是否期望继续朗读。阅读页用它判断"该有声却没声"。
     var isActive: Bool { isPlaybackRequested }
 
+    /// 距离上一次"有声音活动"过了多久。翻页看护用它避免把刚念完的短句再念一遍。
+    private(set) var lastActivityAt = Date()
+    var idleSeconds: TimeInterval { Date().timeIntervalSince(lastActivityAt) }
+
     // MARK: 卡死看门狗
     //
     // AVSpeechSynthesizer 有两个真实的坏状态：
@@ -180,6 +184,7 @@ final class SpeechEngine: NSObject, ObservableObject {
             self.synthesizer.speak(utterance)
             self.isSpeaking = true
             self.isPaused = false
+            self.lastActivityAt = Date()
             self.updateNowPlaying()
         }
 
@@ -523,6 +528,7 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
             self.hasStartedCurrent = true
             self.stallRecoveries = 0
             self.isSpeaking = true
+            self.lastActivityAt = Date()
             self.isPaused = false
             self.armProgressWatchdog()
             self.updateNowPlaying()
@@ -537,6 +543,7 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
             // 有进度就说明没卡，把看门狗往后推
             self.hasStartedCurrent = true
             self.stallRecoveries = 0
+            self.lastActivityAt = Date()
             self.armProgressWatchdog()
         }
     }
@@ -550,6 +557,7 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
             self.finishWatchdog?.cancel()
             self.isSpeaking = false
             self.currentUtterance = nil
+            self.lastActivityAt = Date()
 
             // 这条通知是否还属于最新的一次开口？用户翻页/跳章会触发新的 speak，
             // 代次已经变了，旧回调不能再推进队列。
@@ -581,6 +589,7 @@ extension SpeechEngine: AVSpeechSynthesizerDelegate {
             guard utterance === self.currentUtterance else { return }
             self.isSpeaking = false
             self.isPaused = false
+            self.lastActivityAt = Date()
             self.startWatchdog?.cancel()
             self.finishWatchdog?.cancel()
 

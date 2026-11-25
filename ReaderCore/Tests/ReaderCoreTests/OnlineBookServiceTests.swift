@@ -102,6 +102,16 @@ final class OnlineBookServiceTests: XCTestCase {
         XCTAssertEqual(reloaded.intro, "大千世界，无奇不有。")
     }
 
+    func testPrepareMarksComicSourceAsComicBook() async throws {
+        var source = Self.source
+        source.type = 2
+
+        let bundle = try await service.prepare(onlineBook(), source: source)
+
+        XCTAssertEqual(bundle.book.type, .comic)
+        XCTAssertEqual(bundle.book.origin, .remote)
+    }
+
     func testPrepareThrowsWhenTocEmpty() async {
         StaticURLProtocol.routes["/book/1/toc"] = (200, Data("<html><body></body></html>".utf8), "text/html")
 

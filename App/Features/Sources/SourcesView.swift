@@ -15,8 +15,50 @@ struct SourcesView: View {
     @State private var showingImport = false
     @State private var errorMessage: String?
     @State private var confirmDeleteAll = false
+    @State private var confirmDeleteFailed = false
+    @State private var searchText = ""
+    @State private var filter: HealthFilter = .all
+    @State private var checkedCount = 0
+    @State private var checkTask: Task<Void, Never>?
 
     private var enabledCount: Int { sources.filter(\.enabled).count }
+
+    enum HealthFilter: String, CaseIterable, Identifiable {
+        case all, ok, failed, disabled
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .all: return "全部"
+            case .ok: return "正常"
+            case .failed: return "失败"
+            case .disabled: return "已关闭"
+            }
+        }
+    }
+
+    private var filteredSources: [BookSource] {
+        sources.filter { source in
+            let text = searchText.trimmingCharacters(in: .whitespaces)
+            let matchesText = text.isEmpty
+                || source.name.localizedCaseInsensitiveContains(text)
+                || source.id.localizedCaseInsensitiveContains(text)
+
+            guard matchesText else { return false }
+            switch filter {
+            case .all:
+                return true
+            case .disabled:
+                return !source.enabled
+            case .ok:
+                return health[source.id]?.isHealthy == true
+            case .failed:
+                guard source.enabled, let status = health[source.id] else { return false }
+                if case .skipped = status { return false }
+                return !status.isHealthy
+            }
+        }
+    }
 
     var body: some View {
         ZStack {
@@ -66,6 +108,11 @@ struct SourcesView: View {
         } message: {
             Text("只删书源，书架里的书不受影响。")
         }
+        .confirmationDialog("删除 \(failedSources.count) 条失败的书源？", isPresented: $confirmDeleteFailed, titleVisibility: .visible) {
+            Button("删除失败源", role: .destructive) { deleteFailed() }
+        } message: {
+            Text("只删体检失败或超时的源，正常的源不动。")
+        }
         .onAppear(perform: reload)
     }
 
@@ -75,10 +122,19 @@ struct SourcesView: View {
         ScrollView {
             LazyVStack(spacing: 10) {
                 summaryCard
-                ForEach(sources) { source in
-                    row(source)
+                filterBar
+                if filteredSources.isEmpty {
+                    Text(searchText.isEmpty ? "这个筛选下没有书源" : "没有匹配「\(searchText)」的书源")
+                        .font(Typo.caption)
+                        .foregroundStyle(Palette.ink3)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 24)
+                } else {
+                    ForEach(filteredSources) { source in
+                        row(source)
+                    }
                 }
-                Text("共 \(sources.count) 条 · 启用 \(enabledCount) 条")
+                Text("共 \(sources.count) 条 · 启用 \(enabledCount) 条 · 当前显示 \(filteredSources.count) 条")
                     .font(Typo.micro)
                     .foregroundStyle(Palette.ink3)
                     .padding(.top, 4)
@@ -86,6 +142,50 @@ struct SourcesView: View {
             .padding(.horizontal, Spacing.l)
             .padding(.top, 10)
             .padding(.bottom, 24)
+        }
+    }
+
+    private var filterBar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Palette.ink3)
+                TextField("搜名称或网址", text: $searchText)
+                    .font(.system(size: 13.5))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Palette.ink3.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 11)
+            .frame(height: 36)
+            .background(Palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Palette.line, lineWidth: 1)
+            }
+
+            HStack(spacing: 7) {
+                ForEach(HealthFilter.allCases) { item in
+                    Button {
+                        filter = item
+                    } label: {
+                        Chip(title: item.title, isOn: filter == item)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer(minLength: 0)
+            }
         }
     }
 
@@ -102,6 +202,11 @@ struct SourcesView: View {
             Spacer(minLength: 0)
             Menu {
                 Button("测一下启用的源") { checkAll() }
+                Button("禁用全部失败的源") { disableFailed() }
+                    .disabled(failedSources.isEmpty)
+                Button("删除全部失败的源", role: .destructive) { confirmDeleteFailed = true }
+                    .disabled(failedSources.isEmpty)
+                Divider()
                 Button("删除全部书源", role: .destructive) { confirmDeleteAll = true }
             } label: {
                 Image(systemName: "ellipsis")
@@ -127,10 +232,16 @@ struct SourcesView: View {
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(source.name)
-                    .font(.system(size: 14.5, weight: .medium))
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(source.name)
+                        .font(.system(size: 14.5, weight: .medium))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1)
+                    Text(source.id)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Palette.ink3.opacity(0.85))
+                        .lineLimit(1)
+                }
 
                 if source.type == 2 {
                     Text("漫画")
@@ -214,7 +325,7 @@ struct SourcesView: View {
             Button {
                 checkAll()
             } label: {
-                Text(isCheckingAll ? "正在检测…" : "测一下全部")
+                Text(isCheckingAll ? "停止检测 \(checkedCount)/\(sources.filter(\.enabled).count)" : "测一下全部")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Palette.ink)
                     .frame(maxWidth: .infinity)
@@ -227,7 +338,7 @@ struct SourcesView: View {
                     }
             }
             .buttonStyle(.plain)
-            .disabled(isCheckingAll || sources.isEmpty)
+            .disabled(sources.isEmpty)
 
             Button {
                 showingImport = true
@@ -262,7 +373,7 @@ struct SourcesView: View {
         case .ok(let ms, let count):
             return "正常 · \(ms)ms · \(count) 条结果"
         case .timeout:
-            return "超时 · 源站没在 8 秒内响应"
+            return "超时 · 源站没在 5 秒内响应"
         case .failed(let message):
             return "失败 · \(message)"
         case .skipped(let reason):
@@ -352,15 +463,33 @@ struct SourcesView: View {
     }
 
     private func checkAll() {
-        guard !isCheckingAll else { return }
-        isCheckingAll = true
-        let targets = sources.filter(\.enabled)
+        // 检测中再点 = 停止
+        if isCheckingAll {
+            checkTask?.cancel()
+            checkTask = nil
+            isCheckingAll = false
+            checking.removeAll()
+            return
+        }
 
-        Task {
-            let service = SourceImportService(repo: env.sources)
-            let checker = SourceHealthChecker(client: env.sourceClient)
+        let targets = sources.filter(\.enabled)
+        guard !targets.isEmpty else { return }
+
+        isCheckingAll = true
+        checkedCount = 0
+        checking = Set(targets.map(\.id))
+
+        let byID = Dictionary(uniqueKeysWithValues: targets.map { ($0.id, $0) })
+        let service = SourceImportService(repo: env.sources)
+        let checker = SourceHealthChecker(client: env.sourceClient)
+
+        checkTask = Task {
             await withTaskGroup(of: (String, SourceHealthStatus?).self) { group in
-                for source in targets {
+                var iterator = targets.makeIterator()
+                let width = min(8, targets.count)
+
+                for _ in 0..<width {
+                    guard let source = iterator.next() else { break }
                     group.addTask {
                         guard let executable = service.executable(from: source) else {
                             return (source.id, nil)
@@ -368,15 +497,37 @@ struct SourcesView: View {
                         return (source.id, await checker.check(executable))
                     }
                 }
-                for await (id, status) in group {
+
+                while let (id, status) = await group.next() {
+                    if Task.isCancelled {
+                        group.cancelAll()
+                        break
+                    }
                     await MainActor.run {
-                        if let status { health[id] = status }
+                        if let status {
+                            health[id] = status
+                            if let source = byID[id] { record(status, for: source) }
+                        }
                         checking.remove(id)
+                        checkedCount += 1
+                    }
+                    if let source = iterator.next() {
+                        group.addTask {
+                            guard let executable = service.executable(from: source) else {
+                                return (source.id, nil)
+                            }
+                            return (source.id, await checker.check(executable))
+                        }
                     }
                 }
             }
+
             await MainActor.run {
                 isCheckingAll = false
+                checkTask = nil
+                // 取消时不要弹汇总
+                guard checkedCount >= targets.count else { return }
+
                 var ok = 0, bad = 0
                 for source in targets {
                     switch health[source.id] {
@@ -386,10 +537,34 @@ struct SourcesView: View {
                     }
                 }
                 if bad > 0 || ok == 0 {
-                    errorMessage = "检测完成：\(ok) 条正常，\(bad) 条有问题。有问题的源已标红，可以关掉或删掉。"
+                    errorMessage = "检测完成：\(ok) 条正常，\(bad) 条有问题。可以点右上角菜单一键关闭或删除失败源。"
                 }
             }
         }
+    }
+
+    /// 体检失败 / 超时、且仍然启用的源。
+    private var failedSources: [BookSource] {
+        sources.filter { source in
+            guard source.enabled, let status = health[source.id] else { return false }
+            if case .skipped = status { return false }
+            return !status.isHealthy
+        }
+    }
+
+    private func disableFailed() {
+        for source in failedSources {
+            try? env.sources.setEnabled(id: source.id, enabled: false)
+        }
+        reload()
+    }
+
+    private func deleteFailed() {
+        for source in failedSources {
+            try? env.sources.delete(id: source.id)
+            health[source.id] = nil
+        }
+        reload()
     }
 
     /// 把体检结果写回库，下次进来还能看到上次的结论。

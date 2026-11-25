@@ -39,8 +39,13 @@ struct DetailView: View {
             loadChapterTitles()
         }
         .fullScreenCover(isPresented: $showComicReader) {
-            ComicReaderView(book: book)
-                .environmentObject(env)
+            if book.origin == .remote {
+                OnlineComicView(book: book)
+                    .environmentObject(env)
+            } else {
+                ComicReaderView(book: book)
+                    .environmentObject(env)
+            }
         }
         .fullScreenCover(isPresented: $showReader) {
             NovelReaderView(book: book, env: env, initialChapter: pendingChapter)

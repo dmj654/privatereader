@@ -35,45 +35,67 @@ public actor SearchCoordinator {
         self.perSourceTimeout = perSourceTimeout
     }
 
-    public func search(sources: [LegadoSource], key: String) -> AsyncStream<SourceSearchResult> {
+    /// - Parameter maxConcurrent: 同时打几个源。
+    ///   两千多个源一次性全发出去，iOS 网络栈会大量返回“似乎已断开互联网”。
+    public func search(sources: [LegadoSource],
+                       key: String,
+                       maxConcurrent: Int = 6) -> AsyncStream<SourceSearchResult> {
         let client = self.client
         let timeout = perSourceTimeout
         let enabled = sources.filter { $0.enabled && !$0.searchUrl.isEmpty }
+        let width = max(1, min(maxConcurrent, enabled.count))
 
         return AsyncStream { continuation in
             let task = Task {
                 await withTaskGroup(of: SourceSearchResult.self) { group in
-                    for source in enabled {
+                    var iterator = enabled.makeIterator()
+
+                    for _ in 0..<width {
+                        guard let source = iterator.next() else { break }
                         group.addTask {
-                            let started = Date()
-                            do {
-                                let books = try await withTimeout(seconds: timeout) {
-                                    try await client.search(source: source, key: key)
-                                }
-                                return SourceSearchResult(
-                                    source: source,
-                                    books: books,
-                                    elapsed: Date().timeIntervalSince(started)
-                                )
-                            } catch {
-                                return SourceSearchResult(
-                                    source: source,
-                                    books: [],
-                                    errorText: (error as? LocalizedError)?.errorDescription
-                                        ?? error.localizedDescription,
-                                    elapsed: Date().timeIntervalSince(started)
-                                )
-                            }
+                            await Self.run(source: source, key: key,
+                                           client: client, timeout: timeout)
                         }
                     }
 
-                    for await result in group {
+                    while let result = await group.next() {
                         continuation.yield(result)
+                        if let source = iterator.next() {
+                            group.addTask {
+                                await Self.run(source: source, key: key,
+                                               client: client, timeout: timeout)
+                            }
+                        }
                     }
                 }
                 continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private static func run(source: LegadoSource,
+                            key: String,
+                            client: SourceClient,
+                            timeout: TimeInterval) async -> SourceSearchResult {
+        let started = Date()
+        do {
+            let books = try await withTimeout(seconds: timeout) {
+                try await client.search(source: source, key: key)
+            }
+            return SourceSearchResult(
+                source: source,
+                books: books,
+                elapsed: Date().timeIntervalSince(started)
+            )
+        } catch {
+            return SourceSearchResult(
+                source: source,
+                books: [],
+                errorText: (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription,
+                elapsed: Date().timeIntervalSince(started)
+            )
         }
     }
 }

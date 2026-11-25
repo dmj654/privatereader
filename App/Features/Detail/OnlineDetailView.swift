@@ -62,8 +62,13 @@ struct OnlineDetailView: View {
         .task { await load() }
         .fullScreenCover(isPresented: $showReader) {
             if let shelfBook {
-                NovelReaderView(book: shelfBook, env: env)
-                    .environmentObject(env)
+                if shelfBook.type == .comic {
+                    OnlineComicView(book: shelfBook)
+                        .environmentObject(env)
+                } else {
+                    NovelReaderView(book: shelfBook, env: env)
+                        .environmentObject(env)
+                }
             }
         }
         .overlay(alignment: .bottom) {

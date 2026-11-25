@@ -38,7 +38,7 @@ public struct SourceHealthChecker: Sendable {
 
     public func check(_ source: LegadoSource,
                       keyword: String = "剑",
-                      timeout: TimeInterval = 8) async -> SourceHealthStatus {
+                      timeout: TimeInterval = 5) async -> SourceHealthStatus {
         guard source.enabled else { return .skipped("已关闭") }
         guard !source.searchUrl.isEmpty, !source.ruleSearch.bookList.isEmpty else {
             return .skipped("无搜索规则")

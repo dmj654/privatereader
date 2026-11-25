@@ -51,6 +51,9 @@ struct HomeView: View {
             if book.type == .novel {
                 NovelReaderView(book: book, env: env)
                     .environmentObject(env)
+            } else if book.origin == .remote {
+                OnlineComicView(book: book)
+                    .environmentObject(env)
             } else {
                 ComicReaderView(book: book)
                     .environmentObject(env)

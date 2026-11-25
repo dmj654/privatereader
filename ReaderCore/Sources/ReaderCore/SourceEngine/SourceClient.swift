@@ -158,6 +158,61 @@ public actor SourceClient {
         return text
     }
 
+    // MARK: 漫画
+
+    /// 漫画章的图片地址列表。
+    /// 规则可能返回一段含 <img> 的 HTML，也可能直接返回若干个地址。
+    public func comicPages(source: LegadoSource, chapter: OnlineChapter) async throws -> [String] {
+        guard !source.ruleContent.content.isEmpty else { throw SourceError.emptyRule("正文") }
+        let html = try await fetch(chapter.url, source: source)
+        let raw = RuleRunner.string(source.ruleContent.content, html: html, baseUrl: source.url)
+        let urls = Self.imageURLs(in: raw, base: source.url)
+        guard !urls.isEmpty else { throw SourceError.emptyContent }
+        return urls
+    }
+
+    /// 漫画站的图片大多防盗链，下载时必须带 Referer 和源里配置的 header。
+    public nonisolated func imageHeaders(source: LegadoSource) -> [String: String] {
+        var headers = [
+            "User-Agent": userAgent,
+            "Accept-Language": "zh-CN,zh;q=0.9"
+        ]
+        for (key, value) in Self.parseHeader(source.header) {
+            headers[key] = value
+        }
+        if headers["Referer"] == nil {
+            headers["Referer"] = source.url
+        }
+        return headers
+    }
+
+    static func imageURLs(in raw: String, base: String) -> [String] {
+        if let doc = try? SwiftSoup.parse(raw),
+           let images = try? doc.select("img").array(),
+           !images.isEmpty {
+            return images.compactMap { element in
+                let candidates = [
+                    (try? element.attr("src")) ?? "",
+                    (try? element.attr("data-src")) ?? "",
+                    (try? element.attr("data-original")) ?? ""
+                ]
+                guard let chosen = candidates.first(where: {
+                    !$0.isEmpty && !$0.hasPrefix("data:")
+                }) else { return nil }
+                return RuleRunner.resolveURL(chosen, baseUrl: base)
+            }
+        }
+
+        // 规则直接返回地址：换行 / 逗号 / 空格分隔
+        let separators = CharacterSet(charactersIn: "\n\r,， \t")
+        return raw.components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { token in
+                token.hasPrefix("http") || token.hasPrefix("/") || token.hasPrefix("//")
+            }
+            .map { RuleRunner.resolveURL($0, baseUrl: base) }
+    }
+
     // MARK: 网络
 
     private func fetch(_ rawURL: String, source: LegadoSource) async throws -> String {

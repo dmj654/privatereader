@@ -285,4 +285,79 @@ final class SourceClientTests: XCTestCase {
             // 预期
         }
     }
+
+    // MARK: 漫画
+
+    func testImageURLsFromHTML() {
+        let html = """
+        <div id="content">
+          <img src="/img/1.jpg">
+          <img src="" data-src="/img/2.jpg">
+          <img data-original="https://cdn.example.com/3.jpg">
+          <img src="data:image/gif;base64,xxx">
+        </div>
+        """
+
+        let urls = SourceClient.imageURLs(in: html, base: "https://m.example.com/ch/1")
+
+        XCTAssertEqual(urls, [
+            "https://m.example.com/img/1.jpg",
+            "https://m.example.com/img/2.jpg",
+            "https://cdn.example.com/3.jpg"
+        ])
+    }
+
+    func testImageURLsFromPlainList() {
+        let raw = "https://a.example/1.jpg\n/img/2.jpg, /img/3.png"
+
+        let urls = SourceClient.imageURLs(in: raw, base: "https://m.example.com")
+
+        XCTAssertEqual(urls, [
+            "https://a.example/1.jpg",
+            "https://m.example.com/img/2.jpg",
+            "https://m.example.com/img/3.png"
+        ])
+    }
+
+    func testComicPagesParsesChapterHTML() async throws {
+        MockURLProtocol.routes = [
+            "/ch/1": (200, Data("""
+            <div id="content"><img src="/p/1.jpg"><img data-src="/p/2.jpg"></div>
+            """.utf8), "text/html; charset=utf-8")
+        ]
+        defer { MockURLProtocol.routes = [:] }
+
+        let source = LegadoSource(
+            id: "comic",
+            name: "漫画源",
+            url: "https://m.example.com",
+            type: 2,
+            ruleContent: ContentRule(content: "#content@html")
+        )
+
+        let urls = try await makeClient().comicPages(
+            source: source,
+            chapter: OnlineChapter(name: "第1话", url: "https://m.example.com/ch/1")
+        )
+
+        XCTAssertEqual(urls, [
+            "https://m.example.com/p/1.jpg",
+            "https://m.example.com/p/2.jpg"
+        ])
+    }
+
+    func testImageHeadersIncludeRefererAndSourceHeader() {
+        let source = LegadoSource(
+            id: "comic",
+            name: "漫画源",
+            url: "https://m.example.com",
+            header: "{\"X-Test\":\"1\"}"
+        )
+
+        let headers = makeClient().imageHeaders(source: source)
+
+        XCTAssertEqual(headers["Referer"], "https://m.example.com")
+        XCTAssertEqual(headers["X-Test"], "1")
+        XCTAssertNotNil(headers["User-Agent"])
+    }
 }
