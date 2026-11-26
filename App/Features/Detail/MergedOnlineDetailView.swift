@@ -369,31 +369,34 @@ final class MergedDetailModel: ObservableObject {
         chosen = nil
 
         let ordered = orderedEntries(preferred: preferred)
-        var best: (OnlineBook, LegadoSource, [OnlineChapter])?
-        var readableBest: (OnlineBook, LegadoSource, [OnlineChapter])?
+        var candidates: [(OnlineBook, LegadoSource, [OnlineChapter])] = []
         var tried = 0
 
+        // 先把候选源的目录都取回来，按章节数从多到少排；再逐个验证首章可读。
+        // 这样既不会因为先碰上一个「章节少但能读」的源就错过更完整的，
+        // 也不用对每个源都做两次请求。
         for entry in ordered.prefix(4) {
             guard let source = resolve(entry.sourceId, env: env) else { continue }
             tried += 1
-            guard let toc = try? await env.sourceClient.chapters(source: source, book: entry),
-                  !toc.isEmpty else { continue }
-
-            if best == nil || toc.count > best!.2.count {
-                best = (entry, source, toc)
-            }
-
-            // 目录能取到不代表正文能看。再探一章，确认这个源真的能读。
-            if await canRead(entry: entry, source: source, chapter: toc[0], env: env) {
-                if readableBest == nil || toc.count > readableBest!.2.count {
-                    readableBest = (entry, source, toc)
-                }
-                if toc.count >= 120 { break }
+            if let toc = try? await env.sourceClient.chapters(source: source, book: entry),
+               !toc.isEmpty {
+                candidates.append((entry, source, toc))
             }
         }
 
-        if let chosen = readableBest ?? best {
-            apply(chosen.0, source: chosen.1, chapters: chosen.2)
+        candidates.sort { $0.2.count > $1.2.count }
+
+        for candidate in candidates {
+            if await canRead(entry: candidate.0, source: candidate.1, chapter: candidate.2[0], env: env) {
+                apply(candidate.0, source: candidate.1, chapters: candidate.2)
+                isLoading = false
+                return
+            }
+        }
+
+        if let fallback = candidates.first {
+            // 都读不了也别让页面空着：给章节最多的那个，读的时候再报具体错误。
+            apply(fallback.0, source: fallback.1, chapters: fallback.2)
             isLoading = false
         } else {
             isLoading = false
@@ -402,43 +405,6 @@ final class MergedDetailModel: ObservableObject {
                 : "这几个源都没取到目录。可以稍后重试，或换一个关键词。"
         }
     }
-
-    func pick(sourceId: String, env: AppEnvironment) async {
-        await load(env: env, preferred: sourceId)
-    }
-
-    /// 加入书架（已加过就复用那本）。返回可用于打开阅读器的 Book。
-    func ensureShelf(env: AppEnvironment) async -> Book? {
-        if let shelfBook { return shelfBook }
-        guard let chosen, let source else {
-            errorMessage = "还没有选中可用的源。"
-            return nil
-        }
-
-        isAdding = true
-        defer { isAdding = false }
-
-        if let existing = findExisting(chosen, env: env) {
-            shelfBook = existing
-            return existing
-        }
-
-        do {
-            let service = OnlineBookService(
-                client: env.sourceClient,
-                library: OnlineLibrary(paths: env.paths)
-            )
-            let bundle = try await service.prepare(chosen, source: source)
-            try env.books.insert(bundle.book)
-            shelfBook = bundle.book
-            return bundle.book
-        } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            return nil
-        }
-    }
-
-    // MARK: 内部
 
     /// 取第一章确认正文 / 图片真的能拿到。只看目录，很多死源也能骗过。
     private func canRead(entry: OnlineBook,
