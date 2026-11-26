@@ -34,7 +34,7 @@ struct OnlineDetailView: View {
                     if let errorMessage {
                         Card {
                             VStack(alignment: .leading, spacing: 5) {
-                                Text("打不开这本书")
+                                Text(isComic ? "打不开这本漫画" : "打不开这本书")
                                     .font(Typo.headline)
                                     .foregroundStyle(Palette.danger)
                                 Text(errorMessage)
@@ -87,6 +87,10 @@ struct OnlineDetailView: View {
     }
 
     // MARK: 头部
+
+    private var isComic: Bool {
+        (try? env.sources.fetch(id: online.sourceId))?.type == 2
+    }
 
     private var hero: some View {
         HStack(alignment: .top, spacing: 14) {

@@ -30,4 +30,6 @@ enum AppTab: String, CaseIterable, Identifiable {
 @MainActor
 final class TabRouter: ObservableObject {
     @Published var selection: AppTab = .home
+    /// 下钻到内容详情页时隐藏底部 Tab，退出时恢复。
+    @Published var hidesTabBar = false
 }

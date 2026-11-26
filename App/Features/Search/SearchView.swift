@@ -89,9 +89,7 @@ struct SearchView: View {
                 ForEach(SearchViewModel.Kind.allCases) { kind in
                     Button {
                         keyboardFocus = false
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            model.setKind(kind, env: env)
-                        }
+                        model.setKind(kind, env: env)
                     } label: {
                         Text(kind.title)
                             .font(.system(size: 13, weight: model.kind == kind ? .semibold : .regular))
@@ -148,6 +146,15 @@ struct SearchView: View {
                                message: message)
                 if !model.history.isEmpty {
                     historySection.padding(.horizontal, Spacing.l)
+                }
+            }
+        } else if model.books.isEmpty && !model.isSearching && model.hasSearched {
+            ScrollView {
+                VStack(spacing: 0) {
+                    EmptyStateView(symbol: "magnifyingglass",
+                                   title: "没有搜到「\(model.query)」",
+                                   message: "换个关键词，或者去发现页补几个书源。")
+                    footer
                 }
             }
         } else if model.books.isEmpty && !model.isSearching {

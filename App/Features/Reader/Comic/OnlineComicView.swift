@@ -8,6 +8,7 @@ import ReaderCore
 /// （防盗链），并且需要落盘缓存，否则每次翻回去都要重新下载。
 struct OnlineComicView: View {
     let book: Book
+    var initialChapter: Int? = nil
 
     @EnvironmentObject private var env: AppEnvironment
     @Environment(\.dismiss) private var dismiss
@@ -223,7 +224,7 @@ struct OnlineComicView: View {
                 errorMessage = "这本书所属的书源已被删除。"
             }
 
-            let saved = UserDefaults.standard.integer(forKey: chapterKey)
+            let saved = initialChapter ?? UserDefaults.standard.integer(forKey: chapterKey)
             chapterIndex = min(max(saved, 0), max(manifest.chapters.count - 1, 0))
             loadChapter()
         } catch {

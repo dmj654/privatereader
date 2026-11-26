@@ -20,10 +20,14 @@ struct RootTabView: View {
                 }
             }
 
-            GlassTabBar(selection: $router.selection)
+            if !router.hidesTabBar {
+                GlassTabBar(selection: $router.selection)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .tint(Palette.accent)
         .environmentObject(router)
+        .animation(.easeInOut(duration: 0.18), value: router.hidesTabBar)
     }
 
     @ViewBuilder

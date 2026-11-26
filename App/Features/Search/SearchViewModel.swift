@@ -51,6 +51,7 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var totalSources = 0
     @Published private(set) var finishedSources = 0
     @Published private(set) var failedCount = 0
+    @Published private(set) var hasSearched = false
     @Published private(set) var sourceNames: [String: String] = [:]
     @Published var errorMessage: String?
     @Published var filters = Filters()
@@ -127,6 +128,7 @@ final class SearchViewModel: ObservableObject {
         remember(key)
 
         isSearching = true
+        hasSearched = true
         errorMessage = nil
         books = []
         failedCount = 0
@@ -140,9 +142,12 @@ final class SearchViewModel: ObservableObject {
             guard let self else { return }
             let sources: [LegadoSource]
             do {
-                sources = try SourceImportService(repo: env.sources)
-                    .enabledSources()
-                    .filter { $0.isComic == wantedComic }
+                // 两千多个源的 JSON 解析必须离开主线程：放在主线程会让
+                // 「切分类 / 点搜索」先卡一两秒，看起来就是点了没反应。
+                let repo = env.sources
+                sources = try await Task.detached(priority: .userInitiated) {
+                    try SourceImportService(repo: repo).enabledSources()
+                }.value.filter { $0.isComic == wantedComic }
             } catch {
                 self.isSearching = false
                 self.errorMessage = "读取书源失败：\(error.localizedDescription)"
