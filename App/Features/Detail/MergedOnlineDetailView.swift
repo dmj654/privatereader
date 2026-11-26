@@ -370,23 +370,30 @@ final class MergedDetailModel: ObservableObject {
 
         let ordered = orderedEntries(preferred: preferred)
         var best: (OnlineBook, LegadoSource, [OnlineChapter])?
+        var readableBest: (OnlineBook, LegadoSource, [OnlineChapter])?
         var tried = 0
 
         for entry in ordered.prefix(4) {
             guard let source = resolve(entry.sourceId, env: env) else { continue }
             tried += 1
-            if let toc = try? await env.sourceClient.chapters(source: source, book: entry),
-               !toc.isEmpty {
-                if best == nil || toc.count > best!.2.count {
-                    best = (entry, source, toc)
+            guard let toc = try? await env.sourceClient.chapters(source: source, book: entry),
+                  !toc.isEmpty else { continue }
+
+            if best == nil || toc.count > best!.2.count {
+                best = (entry, source, toc)
+            }
+
+            // 目录能取到不代表正文能看。再探一章，确认这个源真的能读。
+            if await canRead(entry: entry, source: source, chapter: toc[0], env: env) {
+                if readableBest == nil || toc.count > readableBest!.2.count {
+                    readableBest = (entry, source, toc)
                 }
-                // 章节已经很多，基本就是全本，不用再试别的源
-                if toc.count >= 200 { break }
+                if toc.count >= 120 { break }
             }
         }
 
-        if let best {
-            apply(best.0, source: best.1, chapters: best.2)
+        if let chosen = readableBest ?? best {
+            apply(chosen.0, source: chosen.1, chapters: chosen.2)
             isLoading = false
         } else {
             isLoading = false
@@ -432,6 +439,19 @@ final class MergedDetailModel: ObservableObject {
     }
 
     // MARK: 内部
+
+    /// 取第一章确认正文 / 图片真的能拿到。只看目录，很多死源也能骗过。
+    private func canRead(entry: OnlineBook,
+                         source: LegadoSource,
+                         chapter: OnlineChapter,
+                         env: AppEnvironment) async -> Bool {
+        if source.isComic {
+            let pages = try? await env.sourceClient.comicPages(source: source, chapter: chapter)
+            return !(pages?.isEmpty ?? true)
+        }
+        let text = try? await env.sourceClient.content(source: source, chapter: chapter)
+        return !(text?.isEmpty ?? true)
+    }
 
     private func apply(_ entry: OnlineBook, source: LegadoSource, chapters: [OnlineChapter]) {
         chosen = entry
