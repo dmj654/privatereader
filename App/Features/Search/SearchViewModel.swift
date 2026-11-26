@@ -181,7 +181,11 @@ final class SearchViewModel: ObservableObject {
     func setKind(_ newKind: Kind, env: AppEnvironment) {
         guard newKind != kind else { return }
 
-        saveCache()
+        // 只缓存已经搜完的结果。半途切走时缓存下来，
+        // 切回来会看到一堆「看起来完整、其实只搜了几个源」的结果。
+        if !isSearching {
+            saveCache()
+        }
         task?.cancel()
         task = nil
         isSearching = false
