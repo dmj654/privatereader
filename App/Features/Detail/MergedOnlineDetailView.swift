@@ -142,18 +142,24 @@ struct MergedOnlineDetailView: View {
 
             Spacer(minLength: 0)
 
-            Button {
-                showSourcePicker = true
-            } label: {
-                Text("换源")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Palette.accent)
-                    .padding(.horizontal, 10)
-                    .frame(height: 26)
-                    .background(Palette.accentSoft)
-                    .clipShape(Capsule())
+            if model.shelfBook == nil {
+                Button {
+                    showSourcePicker = true
+                } label: {
+                    Text("换源")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.accent)
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .background(Palette.accentSoft)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("已加入书架")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.ink3)
             }
-            .buttonStyle(.plain)
         }
         .padding(11)
         .background(Palette.surface)
@@ -352,6 +358,11 @@ final class MergedDetailModel: ObservableObject {
     }
 
     func load(env: AppEnvironment, preferred: String? = nil) async {
+        // 从阅读器返回 / 视图重建时不要重新探测一遍，用户看到的还是同一个源。
+        if preferred == nil, chosen != nil {
+            isLoading = false
+            return
+        }
         isLoading = true
         errorMessage = nil
         chapters = []
