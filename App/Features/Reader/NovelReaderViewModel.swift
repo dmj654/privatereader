@@ -4,7 +4,7 @@ import ReaderCore
 
 @MainActor
 final class NovelReaderViewModel: ObservableObject {
-    let book: Book
+    private(set) var book: Book
 
     private let provider: ChapterProvider
     private let progressRepo: ProgressRepository
@@ -633,6 +633,33 @@ final class NovelReaderViewModel: ObservableObject {
     }
 
     /// 手动翻页后让朗读跟到当前页的第一句；不在朗读状态时返回 nil。
+    /// 换源后把新清单接进来：书 id 不变，进度与书签继续沿用。
+    @discardableResult
+    func applySourceSwitch(_ updated: Book) -> Bool {
+        guard updated.id == book.id else { return false }
+        do {
+            let newChapters = try provider.chapters(for: updated)
+            guard !newChapters.isEmpty else { return false }
+
+            book = updated
+            chapters = newChapters
+            chapterIndex = min(max(chapterIndex, 0), newChapters.count - 1)
+            pageIndex = 0
+            cachedAttributed = nil
+            cachedKey = nil
+            speechQueue = nil
+            speechSentences = []
+            repaginate()
+            applyPendingPage()
+            persistProgress(force: true)
+            loadBodyIfNeeded()
+            return true
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return false
+        }
+    }
+
     func realignSpeechToCurrentPage() -> String? {
         guard speechQueue != nil else { return nil }
         return prepareSpeech(startAtCurrentPage: true)

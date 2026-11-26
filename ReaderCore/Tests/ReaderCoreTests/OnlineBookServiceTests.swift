@@ -112,6 +112,25 @@ final class OnlineBookServiceTests: XCTestCase {
         XCTAssertEqual(bundle.book.origin, .remote)
     }
 
+    func testSwitchSourceKeepsBookIdAndUpdatesManifest() async throws {
+        let bundle = try await service.prepare(onlineBook(), source: Self.source)
+
+        var other = Self.source
+        other.id = "https://other.example"
+        other.name = "另一个源"
+
+        let updated = try await service.switchSource(book: bundle.book,
+                                                     to: onlineBook(),
+                                                     source: other)
+
+        XCTAssertEqual(updated.id, bundle.book.id, "换源必须沿用同一个书 id，进度才不丢")
+        XCTAssertEqual(updated.sourceId, other.id)
+        XCTAssertEqual(updated.chapterCount, bundle.book.chapterCount)
+
+        let manifest = try library.loadManifest(bookId: bundle.book.id)
+        XCTAssertEqual(manifest.sourceId, other.id)
+    }
+
     func testPrepareThrowsWhenTocEmpty() async {
         StaticURLProtocol.routes["/book/1/toc"] = (200, Data("<html><body></body></html>".utf8), "text/html")
 

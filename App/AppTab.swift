@@ -32,4 +32,6 @@ final class TabRouter: ObservableObject {
     @Published var selection: AppTab = .home
     /// 下钻到内容详情页时隐藏底部 Tab，退出时恢复。
     @Published var hidesTabBar = false
+    /// 是否停在内容详情页。搜索页用它避免"收起键盘"把底栏又放出来。
+    @Published var detailActive = false
 }

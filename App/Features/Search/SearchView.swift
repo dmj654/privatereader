@@ -7,6 +7,7 @@ struct SearchView: View {
     @StateObject private var model = SearchViewModel()
     @FocusState private var keyboardFocus: Bool
     @State private var showFilters = false
+    @State private var restoreTabWork: DispatchWorkItem?
 
     var body: some View {
         ZStack {
@@ -16,13 +17,50 @@ struct SearchView: View {
                 searchBar
                 kindPicker
                 content
+                    // 点结果/空白区域收起键盘；搜索框本身不挂这个手势，
+                    // 否则点输入框会被立刻取消焦点。
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            if keyboardFocus { keyboardFocus = false }
+                        }
+                    )
             }
         }
         .navigationTitle("搜索")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: router.selection) { tab in
-            // 只负责离开时收起键盘；进入搜索页不主动弹（上一个问题）。
-            if tab != .search { keyboardFocus = false }
+            if tab == .search {
+                // 进搜索页直接弹键盘（用户要求）；离开时收起。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    keyboardFocus = true
+                }
+            } else {
+                keyboardFocus = false
+                restoreTabWork?.cancel()
+                withAnimation(.easeInOut(duration: 0.2)) { router.hidesTabBar = false }
+            }
+        }
+        .onChange(of: keyboardFocus) { focused in
+            restoreTabWork?.cancel()
+
+            if focused {
+                withAnimation(.easeInOut(duration: 0.22)) { router.hidesTabBar = true }
+                return
+            }
+
+            if router.selection != .search {
+                withAnimation(.easeInOut(duration: 0.2)) { router.hidesTabBar = false }
+                return
+            }
+
+            // 点结果会先收键盘再 push 详情。延迟一点再放底栏，
+            // 详情页一旦出现（detailActive）就不要再放。
+            let work = DispatchWorkItem {
+                guard !keyboardFocus, !router.detailActive else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { router.hidesTabBar = false }
+            }
+            restoreTabWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
         }
         .sheet(isPresented: $showFilters) {
             SearchFilterSheet(model: model)

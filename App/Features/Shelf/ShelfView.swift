@@ -41,6 +41,7 @@ struct ShelfView: View {
     @State private var lastReport: ImportReport?
     @State private var readingBook: Book?
     @State private var importError: String?
+    @State private var deletingBook: Book?
     @State private var updateCount = 0
     @State private var isCheckingUpdates = false
 
@@ -77,6 +78,26 @@ struct ShelfView: View {
             set: { presentation = $0 }
         )) { item in
             sheetContent(for: item)
+        }
+        .confirmationDialog(
+            "删除《\(deletingBook?.title ?? "")》？",
+            isPresented: Binding(
+                get: { deletingBook != nil },
+                set: { if !$0 { deletingBook = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("只删记录，保留文件") {
+                if let book = deletingBook { delete(book, removeFiles: false) }
+                deletingBook = nil
+            }
+            Button("删除记录和文件", role: .destructive) {
+                if let book = deletingBook { delete(book, removeFiles: true) }
+                deletingBook = nil
+            }
+            Button("取消", role: .cancel) { deletingBook = nil }
+        } message: {
+            Text("只删记录时，原文件仍留在 App 内。")
         }
         .confirmationDialog(
             dialogTitle,
@@ -200,7 +221,7 @@ struct ShelfView: View {
                 },
                 onDelete: {
                     presentation = nil
-                    afterDismiss { presentation = .delete(book) }
+                    afterDismiss { deletingBook = book }
                 }
             )
             .presentationDetents([.height(452)])
@@ -296,9 +317,35 @@ struct ShelfView: View {
             Spacer()
             HStack(spacing: 9) {
                 iconButton("plus") { presentation = .importMenu }
-                iconButton("arrow.up.arrow.down") {
-                    sort = sort == .lastRead ? .title : .lastRead
-                    reload()
+                Menu {
+                    ForEach(ShelfSort.allCases, id: \.self) { option in
+                        Button {
+                            sort = option
+                            reload()
+                        } label: {
+                            if option == sort {
+                                Label(option.title, systemImage: "checkmark")
+                            } else {
+                                Text(option.title)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.up.arrow.down")
+                            .font(.system(size: 14, weight: .medium))
+                        Text(sort.shortTitle)
+                            .font(.system(size: 10))
+                    }
+                    .foregroundStyle(Palette.ink2)
+                    .padding(.horizontal, 9)
+                    .frame(height: 36)
+                    .background(Palette.surface)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Palette.line, lineWidth: 1)
+                    }
                 }
                 Button { presentation = .groupManager } label: {
                     Image(systemName: "ellipsis").font(.system(size: 17))
@@ -604,4 +651,23 @@ struct ShelfView: View {
     }
 
 
+}
+
+
+extension ShelfSort {
+    var title: String {
+        switch self {
+        case .lastRead: return "按最近阅读"
+        case .added: return "按添加时间"
+        case .title: return "按书名"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .lastRead: return "最近"
+        case .added: return "添加"
+        case .title: return "书名"
+        }
+    }
 }

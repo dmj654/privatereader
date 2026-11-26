@@ -31,6 +31,7 @@ struct StripReader: View {
                 }
             }
             .scrollIndicators(.hidden)
+            .ignoresSafeArea(edges: .top)
             .simultaneousGesture(
                 TapGesture().onEnded { onTap() }
             )

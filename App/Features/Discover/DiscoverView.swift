@@ -8,6 +8,9 @@ struct DiscoverView: View {
 
     @State private var sourceCount = 0
     @State private var enabledCount = 0
+    @State private var novelCount = 0
+    @State private var comicCount = 0
+    @State private var kind: SearchViewModel.Kind = .novel
     @State private var showingImport = false
     @State private var loadError: String?
 
@@ -42,9 +45,10 @@ struct DiscoverView: View {
                     if sourceCount == 0 {
                         importGuide
                     } else {
+                        kindPicker
                         sourceCard
                         maintenanceCard
-                        ExploreSection()
+                        ExploreSection(kind: kind)
                     }
 
                     rulesCard
@@ -114,6 +118,30 @@ struct DiscoverView: View {
         }
     }
 
+    private var kindPicker: some View {
+        HStack(spacing: 8) {
+            ForEach(SearchViewModel.Kind.allCases) { item in
+                let count = item == .novel ? novelCount : comicCount
+                Button {
+                    kind = item
+                } label: {
+                    Text("\(item.title) \(count)")
+                        .font(.system(size: 12.5, weight: kind == item ? .semibold : .regular))
+                        .foregroundStyle(kind == item ? .white : Palette.ink2)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(kind == item ? Palette.accent : Palette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(kind == item ? Color.clear : Palette.line, lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     private var sourceCard: some View {
         NavigationLink {
             SourcesView()
@@ -131,7 +159,7 @@ struct DiscoverView: View {
                         Text("书源")
                             .font(Typo.headline)
                             .foregroundStyle(Palette.ink)
-                        Text("已导入 \(sourceCount) 条 · 启用 \(enabledCount) 条")
+                        Text("共 \(sourceCount) 条 · 小说 \(novelCount) / 漫画 \(comicCount)")
                             .font(Typo.micro)
                             .foregroundStyle(Palette.ink3)
                     }
@@ -229,6 +257,8 @@ struct DiscoverView: View {
             let all = try env.sources.all()
             sourceCount = all.count
             enabledCount = all.filter(\.enabled).count
+            novelCount = all.filter { $0.type != 2 }.count
+            comicCount = all.filter { $0.type == 2 }.count
             invalidCount = (try? env.sources.invalidSources().count) ?? 0
             loadError = nil
         } catch {

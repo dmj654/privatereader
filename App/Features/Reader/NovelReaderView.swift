@@ -15,12 +15,14 @@ private enum ReaderSheet: Identifiable {
     case catalog
     case settings(TypographySheet.Focus)
     case voice
+    case sourceSwitch
 
     var id: String {
         switch self {
         case .catalog: return "catalog"
         case .settings(let focus): return "settings-\(focus == .theme ? "theme" : "full")"
         case .voice: return "voice"
+        case .sourceSwitch: return "sourceSwitch"
         }
     }
 }
@@ -80,6 +82,7 @@ struct NovelReaderView: View {
     @State private var lastSentenceCommandAt: TimeInterval = 0
 
     init(book: Book, env: AppEnvironment, initialChapter: Int? = nil) {
+        _book = State(initialValue: book)
         _model = StateObject(wrappedValue: NovelReaderViewModel(
             book: book,
             provider: env.chapterProvider,
@@ -209,6 +212,17 @@ struct NovelReaderView: View {
                 )
                 .presentationDetents([.fraction(0.72), .large])
                 .presentationDragIndicator(.visible)
+
+            case .sourceSwitch:
+                SourceSwitchSheet(book: book) { updated in
+                    stopSpeech()
+                    if model.applySourceSwitch(updated) {
+                        book = updated
+                        Haptics.success()
+                    }
+                    sheet = nil
+                }
+                .presentationDetents([.medium, .large])
 
             case .voice:
                 VoiceSheet(engine: speech)
@@ -965,7 +979,7 @@ struct NovelReaderView: View {
     private var chromeMuted: Color { model.theme.textColor.opacity(0.6) }
     private var chromeFaint: Color { model.theme.textColor.opacity(0.4) }
     private var chromeLine: Color { model.theme.textColor.opacity(0.07) }
-    private var chromeFill: Color { model.theme.textColor.opacity(0.06) }
+    private var chromeFill: Color { model.theme.chromeSurface }
 
     private func menuLayer(size: CGSize) -> some View {
         VStack {
@@ -1078,11 +1092,15 @@ struct NovelReaderView: View {
                 model.addBookmark()
                 Haptics.impact(.light)
             }
-            sideButton("magnifyingglass") {
-                pending = PendingFeature(
-                    title: "全书搜索还没接上",
-                    detail: "现在可以搜目录：点目录按钮，里面有搜索框。正文全文搜索会跟书源搜索一起做。"
-                )
+            if book.origin == .remote {
+                sideButton("arrow.left.arrow.right") { sheet = .sourceSwitch }
+            } else {
+                sideButton("magnifyingglass") {
+                    pending = PendingFeature(
+                        title: "全书搜索还没接上",
+                        detail: "现在可以搜目录：点目录按钮，里面有搜索框。正文全文搜索会跟书源搜索一起做。"
+                    )
+                }
             }
             sideButton("list.bullet") { sheet = .catalog }
             sideButton("play") {

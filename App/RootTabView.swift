@@ -27,7 +27,6 @@ struct RootTabView: View {
         }
         .tint(Palette.accent)
         .environmentObject(router)
-        .animation(.easeInOut(duration: 0.18), value: router.hidesTabBar)
     }
 
     @ViewBuilder

@@ -32,6 +32,9 @@ struct ComicReaderView: View {
     @State private var showDisplay = false
     @State private var isZoomed = false
     @State private var autoTask: Task<Void, Never>?
+    @State private var bookmarked = false
+    @State private var showCatalog = false
+    @State private var toast: String?
 
     @AppStorage("comic.fit") private var fitRaw = ComicFit.height.rawValue
     @AppStorage("comic.background") private var backgroundRaw = "canvas"
@@ -70,29 +73,51 @@ struct ComicReaderView: View {
                 }
 
                 if showPanel {
-                    VStack {
-                        topBar
+                    VStack(spacing: 0) {
+                        ComicTopBar(
+                            title: book.title,
+                            subtitle: pages.isEmpty ? "" : "共 \(pages.count) 页 · 第 \(index + 1) 页",
+                            bookmarked: bookmarked,
+                            onBack: { dismiss() },
+                            onCatalog: { showCatalog = true },
+                            onBookmark: toggleBookmark,
+                            onSettings: { showDisplay = true }
+                        )
                         Spacer()
-                        ComicPanel(
-                            index: $index,
-                            pageCount: pages.count,
-                            mode: $mode,
-                            autoSeconds: $autoSeconds,
-                            onDisplay: { showDisplay = true },
-                            onHide: togglePanel,
-                            onExit: { dismiss() }
+                        ComicBottomBar(
+                            chipText: "P\(index + 1)",
+                            counterText: "\(index + 1) / \(max(pages.count, 1))",
+                            sliderValue: Binding(
+                                get: { Double(index) },
+                                set: { index = min(max(Int($0), 0), max(pages.count - 1, 0)) }
+                            ),
+                            sliderRange: 0...Double(max(pages.count - 1, 0)),
+                            onPrevious: { turn(by: -1) },
+                            onNext: { turn(by: 1) },
+                            previousEnabled: index > 0,
+                            nextEnabled: index < pages.count - 1,
+                            navigationEnabled: mode == .page,
+                            bookmarked: bookmarked,
+                            onBookmark: toggleBookmark,
+                            downloadText: "下载",
+                            onDownload: { showLocalToast("本地漫画已保存在设备上") },
+                            shareURL: localShareURL,
+                            shareText: book.title,
+                            autoSeconds: autoSeconds,
+                            onAuto: cycleAuto
                         )
                     }
                     .transition(.opacity)
                 }
             }
-            .statusBarHidden(!showPanel)
         }
         .navigationBarHidden(true)
+        .edgeDismiss()
         .task { load() }
         .onChange(of: index) { newValue in
             persistPage(newValue)
             prefetch(newValue)
+            refreshBookmark()
             restartAuto()
         }
         .onChange(of: mode) { newValue in
@@ -100,10 +125,26 @@ struct ComicReaderView: View {
             UserDefaults.standard.set(newValue.rawValue, forKey: modeKey)
             restartAuto()
         }
+        .sheet(isPresented: $showCatalog) {
+            pageCatalog
+                .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $showDisplay) {
             ComicDisplaySheet(mode: $mode, fitRaw: $fitRaw,
                               backgroundRaw: $backgroundRaw, autoSeconds: $autoSeconds)
                 .presentationDetents([.height(330)])
+        }
+        .overlay(alignment: .bottom) {
+            if let toast {
+                Text(toast)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(Color.black.opacity(0.72))
+                    .clipShape(Capsule())
+                    .padding(.bottom, 130)
+            }
         }
         .onDisappear {
             autoTask?.cancel()
@@ -118,7 +159,6 @@ struct ComicReaderView: View {
             if let image = store?.image(for: book, index: index, options: decodeOptions) {
                 ZoomablePageView(image: image, fit: fit, isZoomed: $isZoomed)
                     .padding(.horizontal, fit == .height ? 10 : 0)
-                    .padding(.vertical, fit == .width ? 12 : 0)
             } else {
                 ProgressView().tint(Palette.accent)
             }
@@ -167,51 +207,6 @@ struct ComicReaderView: View {
         withAnimation(.easeOut(duration: 0.16)) { index = target }
     }
 
-    // MARK: 顶栏
-
-    private var topBar: some View {
-        HStack {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Palette.ink2)
-                    .frame(width: 40, height: 40)
-                    .background(Palette.surface.opacity(0.94))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Text(book.title)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Palette.ink2)
-                .lineLimit(1)
-                .padding(.horizontal, 12)
-                .frame(height: 32)
-                .background(Palette.surface.opacity(0.94))
-                .clipShape(Capsule())
-
-            Spacer()
-
-            Button {
-                showDisplay = true
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Palette.ink2)
-                    .frame(width: 40, height: 40)
-                    .background(Palette.surface.opacity(0.94))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 8)
-    }
-
     // MARK: 数据
 
     private func load() {
@@ -228,11 +223,91 @@ struct ComicReaderView: View {
             mode = savedMode
         }
         prefetch(index)
+        refreshBookmark()
         restartAuto()
     }
 
     private var pageKey: String { "comic.page.\(book.id)" }
     private var modeKey: String { "comic.mode.\(book.id)" }
+
+    private var localShareURL: URL? {
+        guard let path = book.filePath else { return nil }
+        let url = env.paths.root.appendingPathComponent(path)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    private func refreshBookmark() {
+        let list = (try? env.bookmarks.list(bookId: book.id)) ?? []
+        bookmarked = list.contains { $0.chapterIndex == 0 && $0.offset == index }
+    }
+
+    private func toggleBookmark() {
+        let list = (try? env.bookmarks.list(bookId: book.id)) ?? []
+        if let existing = list.first(where: { $0.chapterIndex == 0 && $0.offset == index }) {
+            try? env.bookmarks.delete(id: existing.id)
+            bookmarked = false
+            showLocalToast("已取消收藏")
+        } else {
+            try? env.bookmarks.add(Bookmark(
+                bookId: book.id,
+                chapterIndex: 0,
+                offset: index,
+                excerpt: "第 \(index + 1) 页"
+            ))
+            bookmarked = true
+            showLocalToast("已收藏第 \(index + 1) 页")
+        }
+        Haptics.selection()
+    }
+
+    private func showLocalToast(_ text: String) {
+        withAnimation(.easeInOut(duration: 0.15)) { toast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            withAnimation(.easeInOut(duration: 0.15)) { toast = nil }
+        }
+    }
+
+    private func cycleAuto() {
+        switch autoSeconds {
+        case 0: autoSeconds = 5
+        case 5: autoSeconds = 10
+        case 10: autoSeconds = 15
+        default: autoSeconds = 0
+        }
+        restartAuto()
+    }
+
+    private var pageCatalog: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
+                    ForEach(pages.indices, id: \.self) { page in
+                        Button {
+                            index = page
+                            showCatalog = false
+                        } label: {
+                            Text("\(page + 1)")
+                                .font(.system(size: 12, weight: page == index ? .semibold : .regular))
+                                .foregroundStyle(page == index ? .white : Palette.ink2)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 38)
+                                .background(page == index ? Palette.accent : Palette.surfaceAlt)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(Spacing.l)
+            }
+            .navigationTitle("页码")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { showCatalog = false }
+                }
+            }
+        }
+    }
 
     private func persistPage(_ value: Int) {
         UserDefaults.standard.set(value, forKey: pageKey)

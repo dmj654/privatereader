@@ -17,11 +17,23 @@ struct SourcesView: View {
     @State private var confirmDeleteAll = false
     @State private var confirmDeleteFailed = false
     @State private var searchText = ""
+    @State private var kindFilter: SourceKind = .novel
     @State private var filter: HealthFilter = .all
     @State private var checkedCount = 0
     @State private var checkTask: Task<Void, Never>?
 
     private var enabledCount: Int { sources.filter(\.enabled).count }
+
+    enum SourceKind: String, CaseIterable, Identifiable {
+        case novel, comic
+
+        var id: String { rawValue }
+        var title: String { self == .novel ? "小说源" : "漫画源" }
+
+        func matches(_ type: Int) -> Bool {
+            self == .comic ? type == 2 : type != 2
+        }
+    }
 
     enum HealthFilter: String, CaseIterable, Identifiable {
         case all, ok, failed, disabled
@@ -39,6 +51,7 @@ struct SourcesView: View {
 
     private var filteredSources: [BookSource] {
         sources.filter { source in
+            guard kindFilter.matches(source.type) else { return false }
             let text = searchText.trimmingCharacters(in: .whitespaces)
             let matchesText = text.isEmpty
                 || source.name.localizedCaseInsensitiveContains(text)
@@ -122,6 +135,7 @@ struct SourcesView: View {
         ScrollView {
             LazyVStack(spacing: 10) {
                 summaryCard
+                kindPicker
                 filterBar
                 if filteredSources.isEmpty {
                     Text(searchText.isEmpty ? "这个筛选下没有书源" : "没有匹配「\(searchText)」的书源")
@@ -142,6 +156,30 @@ struct SourcesView: View {
             .padding(.horizontal, Spacing.l)
             .padding(.top, 10)
             .padding(.bottom, 24)
+        }
+    }
+
+    private var kindPicker: some View {
+        HStack(spacing: 8) {
+            ForEach(SourceKind.allCases) { kind in
+                let count = sources.filter { kind.matches($0.type) }.count
+                Button {
+                    kindFilter = kind
+                } label: {
+                    Text("\(kind.title) \(count)")
+                        .font(.system(size: 12.5, weight: kindFilter == kind ? .semibold : .regular))
+                        .foregroundStyle(kindFilter == kind ? .white : Palette.ink2)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(kindFilter == kind ? Palette.accent : Palette.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(kindFilter == kind ? Color.clear : Palette.line, lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -195,7 +233,7 @@ struct SourcesView: View {
                 Text("已导入 \(sources.count) 条")
                     .font(Typo.headline)
                     .foregroundStyle(Palette.ink)
-                Text("启用 \(enabledCount) 条 · 搜索只走启用的源")
+                Text("启用 \(enabledCount) 条 · 小说 \(sources.filter { $0.type != 2 }.count) / 漫画 \(sources.filter { $0.type == 2 }.count)")
                     .font(Typo.micro)
                     .foregroundStyle(Palette.ink3)
             }

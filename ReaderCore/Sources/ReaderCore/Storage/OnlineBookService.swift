@@ -67,6 +67,46 @@ public actor OnlineBookService {
         return OnlineBookBundle(book: book, manifest: manifest)
     }
 
+    /// 给已在书架的书换源：清单覆盖到同一个书 id 下，进度与书签都不丢。
+    /// 只写文件 + 返回更新后的 Book，入库由调用方决定。
+    public func switchSource(book: Book,
+                             to online: OnlineBook,
+                             source: LegadoSource) async throws -> Book {
+        var detail = online
+        if let enriched = try? await client.bookInfo(source: source, book: online) {
+            detail = enriched
+        }
+
+        let toc = try await client.chapters(source: source, book: detail)
+        guard !toc.isEmpty else { throw SourceError.emptyRule("目录是空的") }
+
+        let manifest = OnlineManifest(
+            bookId: book.id,
+            sourceId: source.id,
+            bookUrl: detail.bookUrl,
+            tocUrl: detail.bookUrl,
+            title: detail.name,
+            author: detail.author,
+            coverUrl: detail.coverUrl,
+            intro: detail.intro,
+            kind: detail.kind,
+            chapters: toc
+        )
+        let relativePath = try library.save(manifest)
+
+        var updated = book
+        updated.type = source.isComic ? .comic : .novel
+        updated.title = detail.name
+        updated.author = detail.author.isEmpty ? nil : detail.author
+        updated.filePath = relativePath
+        updated.sourceId = source.id
+        updated.sourceBookId = detail.bookUrl
+        updated.sourceUrl = detail.bookUrl
+        updated.chapterCount = toc.count
+        updated.newChapterCount = 0
+        return updated
+    }
+
     // MARK: 正文
 
     /// 取一章正文。缓存优先，缺了才请求；请求成功立刻落盘。

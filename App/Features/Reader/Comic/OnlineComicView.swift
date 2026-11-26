@@ -22,18 +22,37 @@ struct OnlineComicView: View {
     @State private var errorMessage: String?
     @State private var showBars = true
     @State private var showCatalog = false
+    @State private var showSettings = false
+    @State private var bookmarked = false
+    @State private var toast: String?
+    @State private var autoPage = 0
+    @State private var autoTask: Task<Void, Never>?
+    @State private var isDownloading = false
+    @State private var downloadText = "下载"
+
+    @AppStorage("comic.autoSeconds") private var autoSeconds = 0
+    @AppStorage("comic.online.background") private var backgroundRaw = "canvas"
 
     private var chapters: [OnlineChapter] { manifest?.chapters ?? [] }
 
+    private var background: Color {
+        switch backgroundRaw {
+        case "black": return Color(hex: 0x111417)
+        case "white": return Color(hex: 0xF7F8FA)
+        default: return Palette.comicCanvas
+        }
+    }
+
     var body: some View {
         ZStack {
-            Palette.comicCanvas.ignoresSafeArea()
+            background.ignoresSafeArea()
 
             if isLoading {
                 ProgressView().tint(Palette.accent)
             } else if let errorMessage {
                 VStack(spacing: 10) {
-                    EmptyStateView(symbol: "exclamationmark.triangle", title: "这一话打不开", message: errorMessage)
+                    EmptyStateView(symbol: "exclamationmark.triangle",
+                                   title: "这一话打不开", message: errorMessage)
                     Button("重试") { loadChapter() }
                         .buttonStyle(SecondaryButtonStyle(height: 40))
                         .frame(width: 140)
@@ -43,132 +62,107 @@ struct OnlineComicView: View {
             }
 
             if showBars {
-                VStack {
-                    topBar
+                VStack(spacing: 0) {
+                    ComicTopBar(
+                        title: book.title,
+                        subtitle: currentSubtitle,
+                        bookmarked: bookmarked,
+                        onBack: { dismiss() },
+                        onCatalog: { showCatalog = true },
+                        onBookmark: toggleBookmark,
+                        onSettings: { showSettings = true }
+                    )
                     Spacer()
-                    bottomBar
+                    ComicBottomBar(
+                        chipText: "E\(chapterIndex + 1) : P1",
+                        counterText: "\(chapterIndex + 1) / \(max(chapters.count, 1)) 话",
+                        sliderValue: Binding(
+                            get: { Double(chapterIndex) },
+                            set: { jumpToChapter(Int($0)) }
+                        ),
+                        sliderRange: 0...Double(max(chapters.count - 1, 0)),
+                        onPrevious: { moveChapter(-1) },
+                        onNext: { moveChapter(1) },
+                        previousEnabled: chapterIndex > 0,
+                        nextEnabled: chapterIndex + 1 < chapters.count,
+                        bookmarked: bookmarked,
+                        onBookmark: toggleBookmark,
+                        downloadText: downloadText,
+                        onDownload: downloadChapter,
+                        shareURL: sourceURL,
+                        shareText: book.title,
+                        autoSeconds: autoSeconds,
+                        onAuto: cycleAuto
+                    )
+                }
+                .transition(.opacity)
+            }
+
+            if let toast {
+                VStack {
+                    Spacer()
+                    Text(toast)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(Color.black.opacity(0.72))
+                        .clipShape(Capsule())
+                        .padding(.bottom, 150)
                 }
                 .transition(.opacity)
             }
         }
         .navigationBarHidden(true)
+        .edgeDismiss()
         .task { loadInitial() }
         .sheet(isPresented: $showCatalog) {
-            catalogSheet
-                .presentationDetents([.medium, .large])
+            catalogSheet.presentationDetents([.medium, .large])
         }
+        .sheet(isPresented: $showSettings) {
+            onlineSettings.presentationDetents([.height(240)])
+        }
+        .onDisappear { autoTask?.cancel() }
     }
 
     // MARK: 页面
 
     private var pageList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(Array(pages.enumerated()), id: \.offset) { index, url in
-                    OnlineComicPage(urlString: url,
-                                    headers: headers,
-                                    cacheURL: cacheURL(index: index),
-                                    placeholderHeight: index == 0 ? 600 : 480)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(pages.enumerated()), id: \.offset) { index, url in
+                        OnlineComicPage(urlString: url,
+                                        headers: headers,
+                                        cacheURL: cacheURL(index: index),
+                                        placeholderHeight: index == 0 ? 600 : 480)
+                            .id(index)
+                    }
+
+                    if !pages.isEmpty {
+                        Text("— 本话完 —")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.ink3)
+                            .padding(.vertical, 26)
+                    }
                 }
-
-                if !pages.isEmpty {
-                    Text("— 本话完 —")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.ink3)
-                        .padding(.vertical, 26)
+            }
+            .scrollIndicators(.hidden)
+            .ignoresSafeArea(edges: .top)
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    withAnimation(.easeInOut(duration: 0.16)) { showBars.toggle() }
+                }
+            )
+            .onChange(of: autoPage) { page in
+                withAnimation(.easeOut(duration: 0.25)) {
+                    proxy.scrollTo(page, anchor: .top)
                 }
             }
         }
-        .scrollIndicators(.hidden)
-        .simultaneousGesture(
-            TapGesture().onEnded {
-                withAnimation(.easeInOut(duration: 0.16)) { showBars.toggle() }
-            }
-        )
     }
 
-    // MARK: 顶栏 / 底栏
-
-    private var topBar: some View {
-        HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Palette.ink2)
-                    .frame(width: 38, height: 38)
-                    .background(Palette.surface.opacity(0.94))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(book.title)
-                    .font(.system(size: 13.5, weight: .medium))
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(1)
-                Text(chapters.indices.contains(chapterIndex) ? chapters[chapterIndex].name : "")
-                    .font(Typo.micro)
-                    .foregroundStyle(Palette.ink3)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 11)
-            .frame(height: 36)
-            .background(Palette.surface.opacity(0.94))
-            .clipShape(Capsule())
-
-            Spacer(minLength: 0)
-
-            Button {
-                showCatalog = true
-            } label: {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Palette.ink2)
-                    .frame(width: 38, height: 38)
-                    .background(Palette.surface.opacity(0.94))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 8)
-    }
-
-    private var bottomBar: some View {
-        HStack(spacing: 10) {
-            Button("上一话") { moveChapter(-1) }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(chapterIndex > 0 ? Palette.ink : Palette.ink3.opacity(0.5))
-                .frame(maxWidth: .infinity)
-                .frame(height: 40)
-                .background(Palette.surface.opacity(0.94))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .disabled(chapterIndex <= 0)
-
-            Text("\(chapterIndex + 1) / \(max(chapters.count, 1))")
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(Palette.ink2)
-                .padding(.horizontal, 10)
-                .frame(height: 40)
-                .background(Palette.surface.opacity(0.94))
-                .clipShape(Capsule())
-
-            Button("下一话") { moveChapter(1) }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(chapterIndex + 1 < chapters.count ? Palette.ink : Palette.ink3.opacity(0.5))
-                .frame(maxWidth: .infinity)
-                .frame(height: 40)
-                .background(Palette.surface.opacity(0.94))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .disabled(chapterIndex + 1 >= chapters.count)
-        }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 24)
-    }
-
-    // MARK: 目录
+    // MARK: 目录 / 设置
 
     private var catalogSheet: some View {
         NavigationStack {
@@ -176,8 +170,7 @@ struct OnlineComicView: View {
                 ForEach(Array(chapters.enumerated()), id: \.offset) { index, chapter in
                     Button {
                         showCatalog = false
-                        chapterIndex = index
-                        loadChapter()
+                        jumpToChapter(index)
                     } label: {
                         HStack {
                             Text(chapter.name)
@@ -205,7 +198,59 @@ struct OnlineComicView: View {
         }
     }
 
+    private var onlineSettings: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("背景")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Palette.ink2)
+                HStack(spacing: 10) {
+                    ForEach([("canvas", "浅灰"), ("white", "白"), ("black", "黑")], id: \.0) { item in
+                        Button {
+                            backgroundRaw = item.0
+                        } label: {
+                            VStack(spacing: 5) {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(item.0 == "canvas" ? Palette.comicCanvas :
+                                            item.0 == "white" ? Color(hex: 0xF7F8FA) : Color(hex: 0x111417))
+                                    .frame(height: 40)
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .strokeBorder(backgroundRaw == item.0 ? Palette.accent : Palette.line,
+                                                          lineWidth: backgroundRaw == item.0 ? 1.8 : 1)
+                                    }
+                                Text(item.1)
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(Palette.ink3)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Spacer()
+            }
+            .padding(Spacing.l)
+            .navigationTitle("显示")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { showSettings = false }
+                }
+            }
+        }
+    }
+
     // MARK: 数据
+
+    private var currentSubtitle: String {
+        guard chapters.indices.contains(chapterIndex) else { return "" }
+        return "第 \(chapterIndex + 1) 话 · \(chapters[chapterIndex].name)"
+    }
+
+    private var sourceURL: URL? {
+        guard let raw = manifest?.bookUrl, !raw.isEmpty else { return nil }
+        return URL(string: raw)
+    }
 
     private func loadInitial() {
         guard manifest == nil else { return }
@@ -233,11 +278,14 @@ struct OnlineComicView: View {
         }
     }
 
-    private func moveChapter(_ delta: Int) {
-        let target = chapterIndex + delta
-        guard chapters.indices.contains(target) else { return }
-        chapterIndex = target
+    private func jumpToChapter(_ index: Int) {
+        guard chapters.indices.contains(index) else { return }
+        chapterIndex = index
         loadChapter()
+    }
+
+    private func moveChapter(_ delta: Int) {
+        jumpToChapter(chapterIndex + delta)
     }
 
     private func loadChapter() {
@@ -249,7 +297,9 @@ struct OnlineComicView: View {
         isLoading = true
         errorMessage = nil
         pages = []
+        autoPage = 0
         UserDefaults.standard.set(chapterIndex, forKey: chapterKey)
+        refreshBookmark()
 
         let chapter = chapters[chapterIndex]
         let source = self.source
@@ -266,6 +316,7 @@ struct OnlineComicView: View {
                 await MainActor.run {
                     pages = urls
                     isLoading = false
+                    restartAuto()
                 }
             } catch {
                 await MainActor.run {
@@ -286,6 +337,109 @@ struct OnlineComicView: View {
             .appendingPathComponent("online", isDirectory: true)
             .appendingPathComponent("\(chapterIndex)", isDirectory: true)
             .appendingPathComponent("\(index).img", isDirectory: false)
+    }
+
+    // MARK: 操作
+
+    private func refreshBookmark() {
+        let list = (try? env.bookmarks.list(bookId: book.id)) ?? []
+        bookmarked = list.contains { $0.chapterIndex == chapterIndex && $0.offset == 0 }
+    }
+
+    private func toggleBookmark() {
+        let list = (try? env.bookmarks.list(bookId: book.id)) ?? []
+        if let existing = list.first(where: { $0.chapterIndex == chapterIndex && $0.offset == 0 }) {
+            try? env.bookmarks.delete(id: existing.id)
+            bookmarked = false
+            showToast("已取消收藏本话")
+        } else {
+            let name = chapters.indices.contains(chapterIndex) ? chapters[chapterIndex].name : "第 \(chapterIndex + 1) 话"
+            try? env.bookmarks.add(Bookmark(
+                bookId: book.id,
+                chapterIndex: chapterIndex,
+                offset: 0,
+                excerpt: name
+            ))
+            bookmarked = true
+            showToast("已收藏本话")
+        }
+        Haptics.selection()
+    }
+
+    private func cycleAuto() {
+        switch autoSeconds {
+        case 0: autoSeconds = 5
+        case 5: autoSeconds = 10
+        case 10: autoSeconds = 15
+        default: autoSeconds = 0
+        }
+        restartAuto()
+    }
+
+    private func restartAuto() {
+        autoTask?.cancel()
+        guard autoSeconds > 0, !pages.isEmpty else { return }
+
+        autoTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(autoSeconds) * 1_000_000_000)
+                if Task.isCancelled { return }
+
+                if autoPage + 1 < pages.count {
+                    autoPage += 1
+                } else if chapterIndex + 1 < chapters.count {
+                    moveChapter(1)
+                    return
+                } else {
+                    return
+                }
+            }
+        }
+    }
+
+    private func downloadChapter() {
+        guard !isDownloading, !pages.isEmpty else { return }
+        isDownloading = true
+        downloadText = "0/\(pages.count)"
+
+        let urls = pages
+        let chapter = chapterIndex
+        let headers = self.headers
+        let bookId = book.id
+
+        Task {
+            var done = 0
+            for (index, raw) in urls.enumerated() {
+                if Task.isCancelled { break }
+                let cacheURL = env.paths.cache
+                    .appendingPathComponent(bookId, isDirectory: true)
+                    .appendingPathComponent("online", isDirectory: true)
+                    .appendingPathComponent("\(chapter)", isDirectory: true)
+                    .appendingPathComponent("\(index).img", isDirectory: false)
+
+                if OnlineComicImageCache.shared.image(for: cacheURL) == nil,
+                   let url = URL(string: raw) {
+                    _ = await OnlineComicImageCache.shared.download(
+                        url: url, headers: headers, to: cacheURL
+                    )
+                }
+                done += 1
+                let text = "\(done)/\(urls.count)"
+                await MainActor.run { downloadText = text }
+            }
+            await MainActor.run {
+                isDownloading = false
+                downloadText = "下载"
+                showToast("本话已缓存")
+            }
+        }
+    }
+
+    private func showToast(_ text: String) {
+        withAnimation(.easeInOut(duration: 0.15)) { toast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            withAnimation(.easeInOut(duration: 0.15)) { toast = nil }
+        }
     }
 }
 

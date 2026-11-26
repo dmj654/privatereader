@@ -4,6 +4,8 @@ import ReaderCore
 /// 发现页的「榜单 / 分类」。只展示自带 exploreUrl 的源；
 /// 没有这类规则的源不在这里出现，免得点进去一片空白。
 struct ExploreSection: View {
+    var kind: SearchViewModel.Kind = .novel
+
     @EnvironmentObject private var env: AppEnvironment
 
     @State private var sources: [LegadoSource] = []
@@ -36,6 +38,15 @@ struct ExploreSection: View {
             }
         }
         .onAppear(perform: loadSources)
+        .onChange(of: kind) { _ in
+            sources = []
+            selectedSourceId = nil
+            categories = []
+            selectedCategory = nil
+            books = []
+            errorText = nil
+            loadSources()
+        }
     }
 
     // MARK: 选择器
@@ -143,7 +154,12 @@ struct ExploreSection: View {
     private func loadSources() {
         guard sources.isEmpty else { return }
         let all = (try? SourceImportService(repo: env.sources).enabledSources()) ?? []
-        sources = all.filter { !$0.exploreUrl.isNilOrEmpty && !$0.ruleExplore.bookList.isEmpty }
+        let wantedComic = kind == .comic
+        sources = all.filter {
+            $0.isComic == wantedComic
+                && !$0.exploreUrl.isNilOrEmpty
+                && !$0.ruleExplore.bookList.isEmpty
+        }
 
         guard let first = sources.first else { return }
         select(source: first)
