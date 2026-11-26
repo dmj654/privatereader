@@ -139,6 +139,28 @@ struct NovelReaderView: View {
             // 退出时整页（包括菜单）一起走，才有"被推回去"的实感
             .offset(x: exitOffset)
             .statusBarHidden(model.isMenuVisible == false && !editingZones)
+            .overlay(alignment: .topLeading) {
+                // 加载失败时菜单不可达，必须留一个明确的返回入口，
+                // 否则用户会卡在"这一章没打开"上，怎么划都出不去。
+                if model.isLoading || model.errorMessage != nil {
+                    Button {
+                        closeReader()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(model.theme.textColor)
+                            .frame(width: 40, height: 40)
+                            .background(model.theme.background.opacity(0.92))
+                            .clipShape(Circle())
+                            .overlay {
+                                Circle().strokeBorder(chromeLine, lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 14)
+                    .padding(.top, 8)
+                }
+            }
             .onAppear { viewWidth = proxy.size.width }
             .onChange(of: proxy.size) { viewWidth = $0.width }
             .onChange(of: model.pageIndex) { _ in scheduleSpeechResumeCheck() }

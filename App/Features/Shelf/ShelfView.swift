@@ -28,6 +28,7 @@ private enum ShelfPresentation: Identifiable {
 
 struct ShelfView: View {
     @EnvironmentObject private var env: AppEnvironment
+    @EnvironmentObject private var router: TabRouter
 
     @State private var books: [Book] = []
     @State private var progressByBook: [String: Double] = [:]
@@ -64,6 +65,11 @@ struct ShelfView: View {
         .task {
             reload()
             await checkUpdates()
+        }
+        .onChange(of: router.selection) { tab in
+            // Tab 一直活在层级里，onAppear 不会再触发；
+            // 从搜索页加入书架后切回来必须重新读一次。
+            if tab == .shelf { reload() }
         }
         .onAppear { reload() }
         .sheet(item: Binding(

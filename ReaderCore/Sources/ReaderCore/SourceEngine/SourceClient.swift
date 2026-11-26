@@ -130,9 +130,35 @@ public actor SourceClient {
                 baseUrl: source.url
             )
 
-        let tocHTML = tocURL == book.bookUrl ? detailHTML : try await fetch(tocURL, source: source)
-        let items = RuleRunner.elements(source.ruleToc.chapterList, html: tocHTML, baseUrl: source.url)
+        var html = tocURL == book.bookUrl ? detailHTML : try await fetch(tocURL, source: source)
+        var chapters: [OnlineChapter] = []
+        var seen = Set<String>()
+        var visitedPages = Set<String>([tocURL])
 
+        // 目录可能分页（nextTocUrl）。开源阅读会一直翻到最后一页，
+        // 这里最多跟 30 页，避免坏源把请求打成死循环。
+        for _ in 0..<30 {
+            for chapter in parseChapters(source: source, html: html) {
+                guard seen.insert(chapter.url).inserted else { continue }
+                chapters.append(chapter)
+            }
+
+            guard !source.ruleToc.nextTocUrl.isEmpty else { break }
+            let nextRaw = RuleRunner.string(source.ruleToc.nextTocUrl, html: html, baseUrl: source.url)
+            let nextURL = RuleRunner.resolveURL(nextRaw, baseUrl: source.url)
+            guard !nextURL.isEmpty,
+                  nextURL != tocURL,
+                  visitedPages.insert(nextURL).inserted else { break }
+            guard let nextHTML = try? await fetch(nextURL, source: source) else { break }
+            html = nextHTML
+        }
+
+        guard !chapters.isEmpty else { throw SourceError.emptyContent }
+        return chapters
+    }
+
+    private func parseChapters(source: LegadoSource, html: String) -> [OnlineChapter] {
+        let items = RuleRunner.elements(source.ruleToc.chapterList, html: html, baseUrl: source.url)
         return items.compactMap { item in
             let name = RuleRunner.string(source.ruleToc.chapterName, html: item, baseUrl: source.url)
             let url = RuleRunner.resolveURL(
@@ -152,11 +178,29 @@ public actor SourceClient {
 
     public func content(source: LegadoSource, chapter: OnlineChapter) async throws -> String {
         guard !source.ruleContent.content.isEmpty else { throw SourceError.emptyRule("正文") }
-        let html = try await fetch(chapter.url, source: source)
-        let raw = RuleRunner.string(source.ruleContent.content, html: html, baseUrl: source.url)
-        let text = Self.plainText(from: raw)
-        guard !text.isEmpty else { throw SourceError.emptyContent }
-        return text
+        var html = try await fetch(chapter.url, source: source)
+        var parts: [String] = []
+        var visited = Set<String>([chapter.url])
+
+        // 正文也可能分页（nextContentUrl），最多跟 5 页
+        for _ in 0..<5 {
+            let raw = RuleRunner.string(source.ruleContent.content, html: html, baseUrl: source.url)
+            let text = Self.plainText(from: raw)
+            if !text.isEmpty { parts.append(text) }
+
+            guard !source.ruleContent.nextContentUrl.isEmpty else { break }
+            let nextRaw = RuleRunner.string(source.ruleContent.nextContentUrl, html: html, baseUrl: source.url)
+            let nextURL = RuleRunner.resolveURL(nextRaw, baseUrl: source.url)
+            guard !nextURL.isEmpty,
+                  nextURL != chapter.url,
+                  visited.insert(nextURL).inserted,
+                  let nextHTML = try? await fetch(nextURL, source: source) else { break }
+            html = nextHTML
+        }
+
+        let joined = parts.joined(separator: "\n\n")
+        guard !joined.isEmpty else { throw SourceError.emptyContent }
+        return joined
     }
 
     // MARK: 漫画
@@ -224,16 +268,59 @@ public actor SourceClient {
 
     // MARK: 网络
 
+    struct RequestSpec {
+        var url: String
+        var method: String = "GET"
+        var body: String?
+        var headers: [String: String] = [:]
+    }
+
+    /// legado 的地址可以带请求参数：`url,{"method":"POST","body":"..."}`。
+    /// 不少 API 源搜索必须 POST，不认这段就完全用不了。
+    static func requestSpec(_ raw: String) -> RequestSpec {
+        guard let range = raw.range(of: ",{", options: .backwards) else {
+            return RequestSpec(url: raw)
+        }
+        let jsonPart = String(raw[range.lowerBound...].dropFirst())
+        guard let data = jsonPart.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return RequestSpec(url: raw)
+        }
+
+        let body = object["body"] as? String
+        let method = (object["method"] as? String)?.uppercased()
+            ?? (body == nil ? "GET" : "POST")
+        let headers = object["headers"] as? [String: String] ?? [:]
+        return RequestSpec(
+            url: String(raw[..<range.lowerBound]),
+            method: method,
+            body: body,
+            headers: headers
+        )
+    }
+
     private func fetch(_ rawURL: String, source: LegadoSource) async throws -> String {
-        let urlString = RuleRunner.resolveURL(rawURL, baseUrl: source.url)
+        let spec = Self.requestSpec(rawURL)
+        let urlString = RuleRunner.resolveURL(spec.url, baseUrl: source.url)
         guard let url = URL(string: urlString) else { throw SourceError.invalidURL }
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
+        request.httpMethod = spec.method
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("zh-CN,zh;q=0.9", forHTTPHeaderField: "Accept-Language")
         for (key, value) in Self.parseHeader(source.header) {
             request.setValue(value, forHTTPHeaderField: key)
+        }
+        for (key, value) in spec.headers {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        if let body = spec.body {
+            request.httpBody = body.data(using: .utf8)
+            if request.value(forHTTPHeaderField: "Content-Type") == nil {
+                request.setValue("application/x-www-form-urlencoded",
+                                 forHTTPHeaderField: "Content-Type")
+            }
         }
 
         let data: Data

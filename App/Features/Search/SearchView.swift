@@ -21,7 +21,8 @@ struct SearchView: View {
         .navigationTitle("搜索")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: router.selection) { tab in
-            keyboardFocus = (tab == .search && model.query.isEmpty && model.books.isEmpty)
+            // 只负责离开时收起键盘；进入搜索页不主动弹（上一个问题）。
+            if tab != .search { keyboardFocus = false }
         }
         .sheet(isPresented: $showFilters) {
             SearchFilterSheet(model: model)

@@ -360,4 +360,91 @@ final class SourceClientTests: XCTestCase {
         XCTAssertEqual(headers["X-Test"], "1")
         XCTAssertNotNil(headers["User-Agent"])
     }
+
+    // MARK: 兼容性
+
+    func testRequestSpecParsesLegadoPOSTSuffix() {
+        let raw = "https://api.example/search,{\"method\":\"POST\",\"body\":\"q={{key}}\",\"headers\":{\"X-Token\":\"abc\"}}"
+
+        let spec = SourceClient.requestSpec(raw)
+
+        XCTAssertEqual(spec.url, "https://api.example/search")
+        XCTAssertEqual(spec.method, "POST")
+        XCTAssertEqual(spec.body, "q={{key}}")
+        XCTAssertEqual(spec.headers["X-Token"], "abc")
+    }
+
+    func testPlainURLStaysGET() {
+        let spec = SourceClient.requestSpec("https://api.example/list?page=2")
+        XCTAssertEqual(spec.method, "GET")
+        XCTAssertNil(spec.body)
+    }
+
+    func testSearchUsesPOSTWhenSpecified() async throws {
+        MockURLProtocol.routes = [
+            "/search": (200, Data("<div class=\"item\"><a class=\"name\" href=\"/b/1\">书</a></div>".utf8), "text/html")
+        ]
+        defer { MockURLProtocol.routes = [:] }
+
+        let source = LegadoSource(
+            id: "post",
+            name: "POST 源",
+            url: "https://api.example",
+            searchUrl: "https://api.example/search,{\"method\":\"POST\",\"body\":\"q={{key}}\"}",
+            ruleSearch: SearchRule(bookList: "class.item", name: "class.name@text", bookUrl: "class.name@href")
+        )
+
+        _ = try await makeClient().search(source: source, key: "剑来")
+
+        XCTAssertEqual(MockURLProtocol.lastRequest?.httpMethod, "POST")
+    }
+
+    func testChaptersFollowNextTocUrl() async throws {
+        MockURLProtocol.routes = [
+            "/toc1": (200, Data("""
+            <div id="list"><dl><dd><a href="/c/1">第一章</a></dd></dl></div>
+            <a class="next" href="/toc2">下一页</a>
+            """.utf8), "text/html"),
+            "/toc2": (200, Data("""
+            <div id="list"><dl><dd><a href="/c/2">第二章</a></dd></dl></div>
+            """.utf8), "text/html")
+        ]
+        defer { MockURLProtocol.routes = [:] }
+
+        let source = LegadoSource(
+            id: "toc",
+            name: "目录分页",
+            url: "https://a.example",
+            ruleToc: TocRule(chapterList: "#list dd", chapterName: "a@text",
+                             chapterUrl: "a@href", nextTocUrl: "a.next@href")
+        )
+        let book = OnlineBook(sourceId: "toc", name: "书", bookUrl: "https://a.example/toc1")
+
+        let chapters = try await makeClient().chapters(source: source, book: book)
+
+        XCTAssertEqual(chapters.map(\.name), ["第一章", "第二章"])
+    }
+
+    func testContentFollowNextContentUrl() async throws {
+        MockURLProtocol.routes = [
+            "/c/1": (200, Data("""
+            <div id="content">第一页</div><a class="next" href="/c/2">下一页</a>
+            """.utf8), "text/html"),
+            "/c/2": (200, Data("<div id=\"content\">第二页</div>".utf8), "text/html")
+        ]
+        defer { MockURLProtocol.routes = [:] }
+
+        let source = LegadoSource(
+            id: "content",
+            name: "正文分页",
+            url: "https://a.example",
+            ruleContent: ContentRule(content: "#content@text", nextContentUrl: "a.next@href")
+        )
+        let chapter = OnlineChapter(name: "第一章", url: "https://a.example/c/1")
+
+        let text = try await makeClient().content(source: source, chapter: chapter)
+
+        XCTAssertTrue(text.contains("第一页"))
+        XCTAssertTrue(text.contains("第二页"))
+    }
 }

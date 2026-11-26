@@ -47,6 +47,9 @@ struct HomeView: View {
         }
         .navigationBarHidden(true)
         .onAppear(perform: reload)
+        .onChange(of: router.selection) { tab in
+            if tab == .home { reload() }
+        }
         .fullScreenCover(item: $readingBook) { book in
             if book.type == .novel {
                 NovelReaderView(book: book, env: env)

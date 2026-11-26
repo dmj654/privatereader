@@ -441,6 +441,20 @@ final class MergedDetailModel: ObservableObject {
             isLoading = false
             return
         }
+        // 同一本书本次运行内看过就直接复用，不再重新探测。
+        if preferred == nil,
+           let cached = MergedDetailCache.shared.snapshot(for: book) {
+            apply(cached.chosen, source: cached.source, chapters: cached.chapters)
+            name = cached.name
+            author = cached.author
+            coverUrl = cached.coverUrl
+            lastChapter = cached.lastChapter
+            intro = cached.intro
+            shelfBook = findExisting(cached.chosen, env: env)
+            isLoading = false
+            return
+        }
+
         isLoading = true
         errorMessage = nil
         chosen = nil
@@ -466,6 +480,7 @@ final class MergedDetailModel: ObservableObject {
         for candidate in candidates {
             if await canRead(source: candidate.1, chapter: candidate.2[0], env: env) {
                 apply(candidate.0, source: candidate.1, chapters: candidate.2)
+                saveToCache()
                 isLoading = false
                 return
             }
@@ -474,6 +489,7 @@ final class MergedDetailModel: ObservableObject {
         if let fallback = candidates.first {
             // 都读不了也别让页面空着：给章节最多的那个，读的时候再报具体错误。
             apply(fallback.0, source: fallback.1, chapters: fallback.2)
+            saveToCache()
             isLoading = false
         } else {
             isLoading = false
@@ -485,6 +501,7 @@ final class MergedDetailModel: ObservableObject {
 
     func pick(sourceId: String, env: AppEnvironment) async {
         await load(env: env, preferred: sourceId)
+        if chosen != nil { saveToCache() }
     }
 
     /// 加入书架（已加过就复用那本）。返回可用于打开阅读器的 Book。
@@ -528,6 +545,25 @@ final class MergedDetailModel: ObservableObject {
         }
         let text = try? await env.sourceClient.content(source: source, chapter: chapter)
         return !(text?.isEmpty ?? true)
+    }
+
+    private func saveToCache() {
+        guard let chosen, let source else { return }
+        MergedDetailCache.shared.store(
+            MergedDetailCache.Snapshot(
+                chosen: chosen,
+                source: source,
+                sourceName: sourceName,
+                chapters: chapters,
+                intro: intro,
+                coverUrl: coverUrl,
+                name: name,
+                author: author,
+                lastChapter: lastChapter,
+                savedAt: Date()
+            ),
+            for: book
+        )
     }
 
     private func apply(_ entry: OnlineBook, source: LegadoSource, chapters: [OnlineChapter]) {
