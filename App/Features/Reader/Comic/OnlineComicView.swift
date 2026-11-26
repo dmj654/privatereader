@@ -7,8 +7,8 @@ import ReaderCore
 /// 和本地 CBZ 分开，是因为取图链路完全不同：这里每张图都要带源站 header
 /// （防盗链），并且需要落盘缓存，否则每次翻回去都要重新下载。
 struct OnlineComicView: View {
-    let book: Book
-    var initialChapter: Int? = nil
+    @State private var book: Book
+    private let initialChapter: Int?
 
     @EnvironmentObject private var env: AppEnvironment
     @Environment(\.dismiss) private var dismiss
@@ -23,6 +23,8 @@ struct OnlineComicView: View {
     @State private var showBars = true
     @State private var showCatalog = false
     @State private var showSettings = false
+    @State private var showSourceSwitch = false
+    @State private var startChapter: Int?
     @State private var bookmarked = false
     @State private var toast: String?
     @State private var autoPage = 0
@@ -120,7 +122,18 @@ struct OnlineComicView: View {
             catalogSheet.presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showSettings) {
-            onlineSettings.presentationDetents([.height(240)])
+            onlineSettings.presentationDetents([.height(320)])
+        }
+        .sheet(isPresented: $showSourceSwitch) {
+            SourceSwitchSheet(book: book) { updated in
+                book = updated
+                manifest = nil
+                startChapter = chapterIndex
+                pages = []
+                isLoading = true
+                loadInitial()
+            }
+            .presentationDetents([.medium, .large])
         }
         .onDisappear { autoTask?.cancel() }
     }
@@ -227,6 +240,31 @@ struct OnlineComicView: View {
                         .buttonStyle(.plain)
                     }
                 }
+                Divider()
+
+                Button {
+                    showSettings = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        showSourceSwitch = true
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.left.arrow.right")
+                        Text("换源")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .font(.system(size: 14))
+                    .foregroundStyle(Palette.accent)
+                    .frame(height: 40)
+                }
+                .buttonStyle(.plain)
+
+                Text("当前源缺话或图片打不开时，可以换一个收录同一本漫画的源。")
+                    .font(Typo.micro)
+                    .foregroundStyle(Palette.ink3)
+
                 Spacer()
             }
             .padding(Spacing.l)
@@ -269,7 +307,8 @@ struct OnlineComicView: View {
                 errorMessage = "这本书所属的书源已被删除。"
             }
 
-            let saved = initialChapter ?? UserDefaults.standard.integer(forKey: chapterKey)
+            let saved = startChapter ?? initialChapter
+                ?? UserDefaults.standard.integer(forKey: chapterKey)
             chapterIndex = min(max(saved, 0), max(manifest.chapters.count - 1, 0))
             loadChapter()
         } catch {
