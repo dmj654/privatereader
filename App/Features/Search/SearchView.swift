@@ -6,7 +6,7 @@ struct SearchView: View {
     @EnvironmentObject private var router: TabRouter
     @StateObject private var model = SearchViewModel()
     @FocusState private var keyboardFocus: Bool
-    @State private var choosing: SearchViewModel.MergedBook?
+    @State private var showFilters = false
 
     var body: some View {
         ZStack {
@@ -23,9 +23,9 @@ struct SearchView: View {
         .onChange(of: router.selection) { tab in
             keyboardFocus = (tab == .search && model.query.isEmpty && model.books.isEmpty)
         }
-        .sheet(item: $choosing) { book in
-            SourceChooserSheet(book: book)
-                .presentationDetents([.medium, .large])
+        .sheet(isPresented: $showFilters) {
+            SearchFilterSheet(model: model)
+                .presentationDetents([.height(360)])
         }
     }
 
@@ -84,29 +84,54 @@ struct SearchView: View {
     }
 
     private var kindPicker: some View {
-        HStack(spacing: 0) {
-            ForEach(SearchViewModel.Kind.allCases) { kind in
-                Button {
-                    keyboardFocus = false
-                    model.setKind(kind, env: env)
-                } label: {
-                    Text(kind.title)
-                        .font(.system(size: 13, weight: model.kind == kind ? .semibold : .regular))
-                        .foregroundStyle(model.kind == kind ? Color.white : Palette.ink2)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 30)
-                        .background(model.kind == kind ? Palette.accent : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        HStack(spacing: 8) {
+            HStack(spacing: 0) {
+                ForEach(SearchViewModel.Kind.allCases) { kind in
+                    Button {
+                        keyboardFocus = false
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            model.setKind(kind, env: env)
+                        }
+                    } label: {
+                        Text(kind.title)
+                            .font(.system(size: 13, weight: model.kind == kind ? .semibold : .regular))
+                            .foregroundStyle(model.kind == kind ? Color.white : Palette.ink2)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 30)
+                            .background(model.kind == kind ? Palette.accent : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
-        }
-        .padding(3)
-        .background(Palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Palette.line, lineWidth: 1)
+            .padding(3)
+            .background(Palette.surface)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Palette.line, lineWidth: 1)
+            }
+
+            Button {
+                showFilters = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(model.activeFilterCount > 0 ? "\(model.activeFilterCount)" : "筛选")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(model.activeFilterCount > 0 ? .white : Palette.ink2)
+                .padding(.horizontal, 11)
+                .frame(height: 36)
+                .background(model.activeFilterCount > 0 ? Palette.accent : Palette.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(model.activeFilterCount > 0 ? Color.clear : Palette.line, lineWidth: 1)
+                }
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, Spacing.l)
         .padding(.bottom, 8)
@@ -131,24 +156,72 @@ struct SearchView: View {
                     .padding(.horizontal, Spacing.l)
                     .padding(.top, 4)
             }
+        } else if model.visibleBooks.isEmpty {
+            ScrollView {
+                VStack(spacing: 0) {
+                    EmptyStateView(symbol: "line.3.horizontal.decrease.circle",
+                                   title: "筛选后没有结果",
+                                   message: "去掉一些筛选条件，或者换个关键词。")
+                    Button("清除筛选") { model.resetFilters() }
+                        .buttonStyle(SecondaryButtonStyle(height: 40))
+                        .frame(width: 160)
+                }
+            }
         } else {
             ScrollView {
-                LazyVStack(spacing: 9) {
-                    ForEach(model.books) { book in
-                        Button {
-                            choosing = book
-                        } label: {
-                            bookRow(book)
+                if model.kind == .comic {
+                    comicGrid
+                } else {
+                    LazyVStack(spacing: 9) {
+                        ForEach(model.visibleBooks) { book in
+                            NavigationLink {
+                                MergedOnlineDetailView(book: book)
+                            } label: {
+                                bookRow(book)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                        footer
                     }
-                    footer
+                    .padding(.horizontal, Spacing.l)
+                    .padding(.top, 4)
+                    .padding(.bottom, 24)
                 }
-                .padding(.horizontal, Spacing.l)
-                .padding(.top, 4)
-                .padding(.bottom, 24)
             }
         }
+    }
+
+    private var comicGrid: some View {
+        VStack(spacing: 10) {
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 10),
+                GridItem(.flexible(), spacing: 10),
+                GridItem(.flexible(), spacing: 10)
+            ], spacing: 12) {
+                ForEach(model.visibleBooks) { book in
+                    NavigationLink {
+                        MergedOnlineDetailView(book: book)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            OnlineCoverView(url: book.coverUrl, title: book.name)
+                                .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                            Text(book.name)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Palette.ink)
+                                .lineLimit(2)
+                            Text("\(book.entries.count) 个源")
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(Palette.accent)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            footer
+        }
+        .padding(.horizontal, Spacing.l)
+        .padding(.top, 4)
+        .padding(.bottom, 24)
     }
 
     private func bookRow(_ book: SearchViewModel.MergedBook) -> some View {
@@ -271,62 +344,51 @@ struct SearchView: View {
     }
 }
 
-// MARK: - 选源（换源）
+// MARK: - 筛选
 
-struct SourceChooserSheet: View {
-    let book: SearchViewModel.MergedBook
-
+struct SearchFilterSheet: View {
+    @ObservedObject var model: SearchViewModel
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            List {
+            Form {
                 Section {
-                    ForEach(Array(book.entries.enumerated()), id: \.offset) { index, entry in
-                        NavigationLink {
-                            OnlineDetailView(online: entry)
-                        } label: {
-                            HStack(spacing: 11) {
-                                OnlineCoverView(url: entry.coverUrl, title: entry.name)
-                                    .frame(width: 38, height: 52)
+                    Toggle("精确匹配书名或作者", isOn: $model.filters.exactMatch)
+                } header: {
+                    Text("精确搜索")
+                } footer: {
+                    Text("打开后只保留书名或作者与关键词完全一致的结果。")
+                }
 
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(sourceName(index))
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(Palette.ink)
-                                        .lineLimit(1)
-                                    if !entry.lastChapter.isEmpty {
-                                        Text(entry.lastChapter)
-                                            .font(Typo.micro)
-                                            .foregroundStyle(Palette.ink3)
-                                            .lineLimit(1)
-                                    }
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.vertical, 2)
+                Section("结果筛选") {
+                    Picker("最少收录源数", selection: $model.filters.minSources) {
+                        Text("不限").tag(1)
+                        Text("至少 2 个源").tag(2)
+                        Text("至少 3 个源").tag(3)
+                    }
+                }
+
+                Section("排序") {
+                    Picker("排序方式", selection: $model.filters.sort) {
+                        ForEach(SearchViewModel.SortMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
                         }
                     }
-                } header: {
-                    Text("选择书源")
-                } footer: {
-                    Text("同一个源点进去看详情，换源就是换一个站点的同一本书。")
+                    .pickerStyle(.segmented)
                 }
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle(book.name)
+            .navigationTitle("搜索筛选")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭") { dismiss() }
+                    Button("清除") { model.resetFilters() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
                 }
             }
         }
-    }
-
-    private func sourceName(_ index: Int) -> String {
-        guard book.sourceNames.indices.contains(index) else { return "书源 \(index + 1)" }
-        return book.sourceNames[index]
     }
 }
 

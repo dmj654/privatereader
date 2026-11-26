@@ -4,7 +4,7 @@ import ReaderCore
 /// 搜索页状态。
 ///
 /// 结果按「书名 + 作者」合并：同一本书在不同源里的条目收进一本书里，
-/// 界面上只出现一本书，点进去再选源（换源）。
+/// 界面上只出现一本书，点进去直接看详情，需要时再换源。
 @MainActor
 final class SearchViewModel: ObservableObject {
     enum Kind: String, CaseIterable, Identifiable {
@@ -13,6 +13,22 @@ final class SearchViewModel: ObservableObject {
 
         var id: String { rawValue }
         var title: String { self == .novel ? "小说" : "漫画" }
+    }
+
+    enum SortMode: String, CaseIterable, Identifiable {
+        case sources
+        case name
+
+        var id: String { rawValue }
+        var title: String { self == .sources ? "按源数" : "按书名" }
+    }
+
+    struct Filters: Equatable {
+        /// 书名或作者必须与关键词完全一致
+        var exactMatch = false
+        /// 至少被这么多个源收录
+        var minSources = 1
+        var sort: SortMode = .sources
     }
 
     struct MergedBook: Identifiable {
@@ -24,10 +40,11 @@ final class SearchViewModel: ObservableObject {
         var lastChapter: String
         var entries: [OnlineBook]
         var sourceNames: [String]
+        var isComic: Bool
     }
 
     @Published var query = ""
-    @Published var kind: Kind = .novel
+    @Published private(set) var kind: Kind = .novel
     @Published private(set) var books: [MergedBook] = []
     @Published private(set) var history: [String] = []
     @Published private(set) var isSearching = false
@@ -36,6 +53,7 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var failedCount = 0
     @Published private(set) var sourceNames: [String: String] = [:]
     @Published var errorMessage: String?
+    @Published var filters = Filters()
 
     private var task: Task<Void, Never>?
     private var coordinator: SearchCoordinator?
@@ -43,11 +61,61 @@ final class SearchViewModel: ObservableObject {
     private var failedSources: [LegadoSource] = []
     private static let historyKey = "search.history"
 
+    /// 每个分类各自留一份结果。来回切「小说/漫画」不该重新搜、也不该白屏。
+    private struct CachedResults {
+        var query: String
+        var books: [MergedBook]
+        var total: Int
+        var finished: Int
+        var failed: [LegadoSource]
+        var failedCount: Int
+        var sourceNames: [String: String]
+    }
+    private var cache: [Kind: CachedResults] = [:]
+
     init() {
         history = UserDefaults.standard.stringArray(forKey: Self.historyKey) ?? []
     }
 
     var hasResults: Bool { !books.isEmpty }
+
+    var activeFilterCount: Int {
+        var count = 0
+        if filters.exactMatch { count += 1 }
+        if filters.minSources > 1 { count += 1 }
+        if filters.sort != .sources { count += 1 }
+        return count
+    }
+
+    /// 应用筛选后的展示列表。
+    var visibleBooks: [MergedBook] {
+        let key = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var list = books
+
+        if filters.exactMatch, !key.isEmpty {
+            list = list.filter {
+                $0.name.lowercased() == key || $0.author.lowercased() == key
+            }
+        }
+        if filters.minSources > 1 {
+            list = list.filter { $0.entries.count >= filters.minSources }
+        }
+
+        switch filters.sort {
+        case .sources:
+            list.sort { lhs, rhs in
+                if lhs.entries.count != rhs.entries.count {
+                    return lhs.entries.count > rhs.entries.count
+                }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+        case .name:
+            list.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        }
+        return list
+    }
+
+    // MARK: 搜索
 
     func search(env: AppEnvironment, force: Bool = false) {
         let key = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -63,6 +131,7 @@ final class SearchViewModel: ObservableObject {
         books = []
         failedCount = 0
         finishedSources = 0
+        totalSources = 0
         failedSources = []
 
         let wantedComic = kind == .comic
@@ -100,17 +169,33 @@ final class SearchViewModel: ObservableObject {
             }
 
             self.isSearching = false
+            self.saveCache()
         }
     }
 
     func setKind(_ newKind: Kind, env: AppEnvironment) {
         guard newKind != kind else { return }
+
+        saveCache()
+        task?.cancel()
+        task = nil
+        isSearching = false
         kind = newKind
-        searchedKey = ""
+        errorMessage = nil
+
+        let key = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let cached = cache[newKind], cached.query == key, !cached.books.isEmpty {
+            restore(cached)
+            return
+        }
+
         books = []
         failedCount = 0
         finishedSources = 0
-        if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+        totalSources = 0
+        failedSources = []
+
+        if !key.isEmpty {
             search(env: env, force: true)
         }
     }
@@ -131,6 +216,7 @@ final class SearchViewModel: ObservableObject {
                 self.apply(result)
             }
             self.isSearching = false
+            self.saveCache()
         }
     }
 
@@ -143,6 +229,10 @@ final class SearchViewModel: ObservableObject {
     func clearHistory() {
         history = []
         UserDefaults.standard.removeObject(forKey: Self.historyKey)
+    }
+
+    func resetFilters() {
+        filters = Filters()
     }
 
     // MARK: 合并
@@ -159,12 +249,6 @@ final class SearchViewModel: ObservableObject {
 
         for online in result.books {
             merge(online, sourceName: result.source.name)
-        }
-        books.sort { lhs, rhs in
-            if lhs.entries.count != rhs.entries.count {
-                return lhs.entries.count > rhs.entries.count
-            }
-            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
     }
 
@@ -186,7 +270,8 @@ final class SearchViewModel: ObservableObject {
                 kindText: online.kind,
                 lastChapter: online.lastChapter,
                 entries: [online],
-                sourceNames: [sourceName]
+                sourceNames: [sourceName],
+                isComic: kind == .comic
             ))
         }
     }
@@ -202,5 +287,30 @@ final class SearchViewModel: ObservableObject {
         list.insert(key, at: 0)
         history = Array(list.prefix(12))
         UserDefaults.standard.set(history, forKey: Self.historyKey)
+    }
+
+    // MARK: 缓存
+
+    private func saveCache() {
+        guard !searchedKey.isEmpty else { return }
+        cache[kind] = CachedResults(
+            query: searchedKey,
+            books: books,
+            total: totalSources,
+            finished: finishedSources,
+            failed: failedSources,
+            failedCount: failedCount,
+            sourceNames: sourceNames
+        )
+    }
+
+    private func restore(_ cached: CachedResults) {
+        books = cached.books
+        totalSources = cached.total
+        finishedSources = cached.finished
+        failedSources = cached.failed
+        failedCount = cached.failedCount
+        sourceNames = cached.sourceNames
+        searchedKey = cached.query
     }
 }

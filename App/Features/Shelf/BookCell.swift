@@ -23,16 +23,16 @@ struct BookCell: View {
                 .lineLimit(1)
                 .padding(.top, 8)
 
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color(hex: 0xEDF0F3))
-                    Capsule().fill(Palette.accent)
-                        .frame(width: max(0, min(1, progress)) * proxy.size.width)
-                }
-            }
-            .frame(height: 2.5)
-            .padding(.top, 6)
+            Text(progressText)
+                .font(.system(size: 10.5).monospacedDigit())
+                .foregroundStyle(progress > 0 ? Palette.accent : Palette.ink3.opacity(0.8))
+                .padding(.top, 5)
         }
+    }
+
+    private var progressText: String {
+        let percent = Int((max(0, min(1, progress)) * 100).rounded())
+        return percent == 0 ? "0%" : "\(percent)%"
     }
 
     private func badge(text: String) -> some View {
