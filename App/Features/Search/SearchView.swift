@@ -156,6 +156,14 @@ struct SearchView: View {
                     .padding(.horizontal, Spacing.l)
                     .padding(.top, 4)
             }
+        } else if model.books.isEmpty && model.isSearching {
+            VStack(spacing: 10) {
+                ProgressView().tint(Palette.accent)
+                Text("正在搜索 \(model.finishedSources)/\(model.totalSources) 个源")
+                    .font(Typo.micro)
+                    .foregroundStyle(Palette.ink3)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.visibleBooks.isEmpty {
             ScrollView {
                 VStack(spacing: 0) {
