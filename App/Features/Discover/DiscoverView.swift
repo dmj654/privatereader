@@ -259,7 +259,10 @@ struct DiscoverView: View {
             enabledCount = all.filter(\.enabled).count
             novelCount = all.filter { $0.type != 2 }.count
             comicCount = all.filter { $0.type == 2 }.count
-            invalidCount = (try? env.sources.invalidSources().count) ?? 0
+            let invalid = (try? env.sources.invalidSources()) ?? []
+            invalidCount = invalid.filter {
+                kind == .comic ? $0.type == 2 : $0.type != 2
+            }.count
             loadError = nil
         } catch {
             loadError = error.localizedDescription
@@ -278,9 +281,10 @@ struct DiscoverView: View {
             return
         }
 
-        let enabled = (try? SourceImportService(repo: env.sources).enabledSources()) ?? []
+        let allEnabled = (try? SourceImportService(repo: env.sources).enabledSources()) ?? []
+        let enabled = allEnabled.filter { $0.isComic == (kind == .comic) }
         guard !enabled.isEmpty else {
-            maintenanceMessage = "没有启用的书源。"
+            maintenanceMessage = "没有启用的\(kind.title)源。"
             return
         }
 
@@ -332,14 +336,16 @@ struct DiscoverView: View {
     }
 
     private func deleteInvalid() {
-        let invalid = (try? env.sources.invalidSources()) ?? []
+        let invalid = ((try? env.sources.invalidSources()) ?? []).filter {
+            kind == .comic ? $0.type == 2 : $0.type != 2
+        }
         guard !invalid.isEmpty else {
             maintenanceMessage = "没有可删除的失效源。"
             return
         }
         try? env.sources.delete(ids: invalid.map(\.id))
         reload()
-        maintenanceMessage = "已删除 \(invalid.count) 条失效书源。"
+        maintenanceMessage = "已删除 \(invalid.count) 条失效\(kind == .comic ? "漫画源" : "小说源")。"
     }
 
     private static func checkResultText(_ status: SourceHealthStatus) -> String {
