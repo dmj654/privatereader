@@ -406,6 +406,41 @@ final class MergedDetailModel: ObservableObject {
         }
     }
 
+    func pick(sourceId: String, env: AppEnvironment) async {
+        await load(env: env, preferred: sourceId)
+    }
+
+    /// 加入书架（已加过就复用那本）。返回可用于打开阅读器的 Book。
+    func ensureShelf(env: AppEnvironment) async -> Book? {
+        if let shelfBook { return shelfBook }
+        guard let chosen, let source else {
+            errorMessage = "还没有选中可用的源。"
+            return nil
+        }
+
+        isAdding = true
+        defer { isAdding = false }
+
+        if let existing = findExisting(chosen, env: env) {
+            shelfBook = existing
+            return existing
+        }
+
+        do {
+            let service = OnlineBookService(
+                client: env.sourceClient,
+                library: OnlineLibrary(paths: env.paths)
+            )
+            let bundle = try await service.prepare(chosen, source: source)
+            try env.books.insert(bundle.book)
+            shelfBook = bundle.book
+            return bundle.book
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return nil
+        }
+    }
+
     /// 取第一章确认正文 / 图片真的能拿到。只看目录，很多死源也能骗过。
     private func canRead(entry: OnlineBook,
                          source: LegadoSource,
