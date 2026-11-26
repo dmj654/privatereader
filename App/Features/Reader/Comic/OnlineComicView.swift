@@ -35,6 +35,11 @@ struct OnlineComicView: View {
     @AppStorage("comic.autoSeconds") private var autoSeconds = 0
     @AppStorage("comic.online.background") private var backgroundRaw = "canvas"
 
+    init(book: Book, initialChapter: Int? = nil) {
+        _book = State(initialValue: book)
+        self.initialChapter = initialChapter
+    }
+
     private var chapters: [OnlineChapter] { manifest?.chapters ?? [] }
 
     private var background: Color {
