@@ -90,4 +90,22 @@ final class SourceFormatTests: XCTestCase {
 
         XCTAssertEqual(sources.first?.name, "前后空白")
     }
+
+    func testVeneraIndexIsRejectedWithClearError() throws {
+        let json = """
+        [{"name":"拷贝漫画","fileName":"copy_manga.js","key":"copy_manga","version":"1.4.1"}]
+        """
+
+        XCTAssertThrowsError(try LegadoParser.parse(data: Data(json.utf8))) { error in
+            XCTAssertEqual(error as? LegadoParserError, .veneraSource)
+        }
+    }
+
+    func testVeneraJSScriptIsRejectedWithClearError() throws {
+        let js = "class CopyManga extends ComicSource { name = \"拷贝漫画\" }"
+
+        XCTAssertThrowsError(try LegadoParser.parse(data: Data(js.utf8))) { error in
+            XCTAssertEqual(error as? LegadoParserError, .veneraSource)
+        }
+    }
 }

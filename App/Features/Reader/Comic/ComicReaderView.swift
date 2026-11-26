@@ -84,7 +84,8 @@ struct ComicReaderView: View {
                             onSettings: { showDisplay = true }
                         )
                         Spacer()
-                        ComicBottomBar(
+                        if !pages.isEmpty {
+                            ComicBottomBar(
                             chipText: "P\(index + 1)",
                             counterText: "\(index + 1) / \(max(pages.count, 1))",
                             sliderValue: Binding(
@@ -103,9 +104,10 @@ struct ComicReaderView: View {
                             onDownload: { showLocalToast("本地漫画已保存在设备上") },
                             shareURL: localShareURL,
                             shareText: book.title,
-                            autoSeconds: autoSeconds,
-                            onAuto: cycleAuto
-                        )
+                                autoSeconds: autoSeconds,
+                                onAuto: cycleAuto
+                            )
+                        }
                     }
                     .transition(.opacity)
                 }

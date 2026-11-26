@@ -3,11 +3,16 @@ import Foundation
 public enum LegadoParserError: LocalizedError, Equatable {
     case invalidJSON
     case empty
+    /// Venera 的 JS 源索引/脚本，不是 legado 书源。
+    case veneraSource
 
     public var errorDescription: String? {
         switch self {
         case .invalidJSON: return "这不是有效的 JSON 文件"
         case .empty: return "文件里没有可用的书源"
+        case .veneraSource:
+            return "这是 Venera 的 JavaScript 源（index.json / .js），不是 legado 书源。"
+                + "当前版本只能导入 legado 的 JSON 书源，还不能执行 Venera 的 JS 脚本。"
         }
     }
 }
@@ -34,6 +39,14 @@ public enum LegadoParser {
         }
 
         let dicts = try extractDicts(from: data)
+
+        if let first = dicts.first,
+           first["fileName"] != nil,
+           first["key"] != nil,
+           first["bookSourceName"] == nil {
+            throw LegadoParserError.veneraSource
+        }
+
         var result: [LegadoSource] = []
         var seen = Set<String>()
 
@@ -86,6 +99,11 @@ public enum LegadoParser {
                 }
                 if !dicts.isEmpty { return dicts }
             }
+        }
+
+        if let text = String(data: data, encoding: .utf8),
+           text.contains("extends ComicSource") {
+            throw LegadoParserError.veneraSource
         }
 
         throw LegadoParserError.invalidJSON

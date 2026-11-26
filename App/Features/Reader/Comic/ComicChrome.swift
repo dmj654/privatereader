@@ -77,6 +77,17 @@ struct ComicBottomBar: View {
     let autoSeconds: Int
     let onAuto: () -> Void
 
+    /// Slider 的区间不能是 0...0：SwiftUI 会在内部做除法，直接崩。
+    private var safeRange: ClosedRange<Double> {
+        let lower = sliderRange.lowerBound
+        let upper = max(sliderRange.upperBound, lower + 1)
+        return lower...upper
+    }
+
+    private var sliderEnabled: Bool {
+        navigationEnabled && sliderRange.upperBound > sliderRange.lowerBound
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             HStack {
@@ -98,9 +109,16 @@ struct ComicBottomBar: View {
             HStack(spacing: 10) {
                 navButton("backward.end.fill", enabled: navigationEnabled && previousEnabled, action: onPrevious)
 
-                Slider(value: $sliderValue, in: sliderRange, step: 1)
-                    .tint(Palette.accent)
-                    .disabled(!navigationEnabled || sliderRange.upperBound <= sliderRange.lowerBound)
+                if sliderEnabled {
+                    Slider(value: $sliderValue, in: safeRange, step: 1)
+                        .tint(Palette.accent)
+                } else {
+                    // 没有可翻的页/话时不构造 Slider，彻底避开空区间。
+                    Capsule()
+                        .fill(Palette.line)
+                        .frame(height: 4)
+                        .padding(.horizontal, 8)
+                }
 
                 navButton("forward.end.fill", enabled: navigationEnabled && nextEnabled, action: onNext)
             }

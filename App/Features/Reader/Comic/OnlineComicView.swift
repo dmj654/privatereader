@@ -80,7 +80,8 @@ struct OnlineComicView: View {
                         onSettings: { showSettings = true }
                     )
                     Spacer()
-                    ComicBottomBar(
+                    if !chapters.isEmpty {
+                        ComicBottomBar(
                         chipText: "E\(chapterIndex + 1) : P1",
                         counterText: "\(chapterIndex + 1) / \(max(chapters.count, 1)) 话",
                         sliderValue: Binding(
@@ -98,9 +99,10 @@ struct OnlineComicView: View {
                         onDownload: downloadChapter,
                         shareURL: sourceURL,
                         shareText: book.title,
-                        autoSeconds: autoSeconds,
-                        onAuto: cycleAuto
-                    )
+                            autoSeconds: autoSeconds,
+                            onAuto: cycleAuto
+                        )
+                    }
                 }
                 .transition(.opacity)
             }
